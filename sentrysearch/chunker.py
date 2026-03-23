@@ -169,6 +169,46 @@ def chunk_video(
     return chunks
 
 
+def preprocess_chunk(
+    chunk_path: str,
+    target_resolution: int = 480,
+    target_fps: int = 5,
+) -> str:
+    """Downscale and reduce frame rate of a video chunk for cheaper embedding.
+
+    Args:
+        chunk_path: Path to the input mp4 chunk.
+        target_resolution: Target height in pixels (width scales to maintain aspect ratio).
+        target_fps: Target frames per second.
+
+    Returns:
+        Path to the preprocessed file, or the original chunk_path on failure.
+    """
+    try:
+        ffmpeg_exe = _get_ffmpeg_executable()
+        base, ext = os.path.splitext(chunk_path)
+        out_path = f"{base}_preprocessed{ext}"
+
+        subprocess.run(
+            [
+                ffmpeg_exe,
+                "-y",
+                "-i", chunk_path,
+                "-vf", f"scale=-2:{target_resolution},fps={target_fps}",
+                "-c:v", "libx264",
+                "-crf", "28",
+                "-c:a", "aac",
+                "-b:a", "64k",
+                out_path,
+            ],
+            capture_output=True,
+            check=True,
+        )
+        return out_path
+    except Exception:
+        return chunk_path
+
+
 def scan_directory(directory_path: str) -> list[str]:
     """Recursively find all .mp4 files in a directory.
 

@@ -124,6 +124,13 @@ def embed_video_chunk(chunk_path: str, verbose: bool = False) -> list[float]:
     client = _get_client()
     video_part = _make_video_part(chunk_path)
 
+    if verbose:
+        size_kb = os.path.getsize(chunk_path) / 1024
+        print(
+            f"    [verbose] sending {size_kb:.0f}KB to {EMBED_MODEL}",
+            file=sys.stderr,
+        )
+
     _limiter.wait()
     t0 = time.monotonic()
     response = _retry(

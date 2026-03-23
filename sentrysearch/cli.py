@@ -141,10 +141,16 @@ def init():
               help="Chunk duration in seconds.")
 @click.option("--overlap", default=5, show_default=True,
               help="Overlap between chunks in seconds.")
+@click.option("--preprocess/--no-preprocess", default=True, show_default=True,
+              help="Downscale and reduce frame rate before embedding.")
+@click.option("--target-resolution", default=480, show_default=True,
+              help="Target video height in pixels for preprocessing.")
+@click.option("--target-fps", default=5, show_default=True,
+              help="Target frames per second for preprocessing.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def index(directory, chunk_duration, overlap, verbose):
+def index(directory, chunk_duration, overlap, preprocess, target_resolution, target_fps, verbose):
     """Index mp4 files in DIRECTORY for searching."""
-    from .chunker import chunk_video, scan_directory
+    from .chunker import chunk_video, preprocess_chunk, scan_directory
     from .embedder import embed_video_chunk
     from .store import SentryStore
 
@@ -187,7 +193,25 @@ def index(directory, chunk_duration, overlap, verbose):
                     f"Indexing file {file_idx}/{total_files}: {basename} "
                     f"[chunk {chunk_idx}/{num_chunks}]"
                 )
-                embedding = embed_video_chunk(chunk["chunk_path"], verbose=verbose)
+
+                embed_path = chunk["chunk_path"]
+                if preprocess:
+                    original_size = os.path.getsize(embed_path)
+                    embed_path = preprocess_chunk(
+                        embed_path,
+                        target_resolution=target_resolution,
+                        target_fps=target_fps,
+                    )
+                    if verbose:
+                        new_size = os.path.getsize(embed_path)
+                        click.echo(
+                            f"    [verbose] preprocess: {original_size / 1024:.0f}KB -> "
+                            f"{new_size / 1024:.0f}KB "
+                            f"({100 * (1 - new_size / original_size):.0f}% reduction)",
+                            err=True,
+                        )
+
+                embedding = embed_video_chunk(embed_path, verbose=verbose)
                 embedded.append({**chunk, "embedding": embedding})
 
             store.add_chunks(embedded)
