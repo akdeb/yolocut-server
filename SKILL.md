@@ -6,12 +6,13 @@ description: >
   with natural language queries to find and auto-trim matching clips.
 version: 0.1.0
 metadata:
-  openclaw:
+  clawdbot:
     requires:
       env:
         - GEMINI_API_KEY
       bins:
         - ffmpeg
+        - python3
     primaryEnv: GEMINI_API_KEY
     homepage: https://github.com/ssrajadh/sentrysearch
     emoji: "🎥"
