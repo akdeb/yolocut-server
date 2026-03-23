@@ -106,14 +106,21 @@ Gemini Embedding 2 can natively embed video — raw video pixels are projected i
 
 ## Cost
 
-By default, chunks are automatically downscaled to 480p at 5fps and still-frame chunks (e.g. a parked car with no activity) are skipped entirely before embedding. This significantly reduces the amount of data sent to the API compared to raw footage.
+Indexing 1 hour of footage costs ~$2.50 with Gemini's embedding API (default settings: 30s chunks, 5s overlap). The API bills by video duration, so this cost is driven by the number of chunks, not file size.
 
-Cost can be further tuned with:
+Two built-in optimizations help reduce costs in different ways:
 
-- `--target-resolution` / `--target-fps` — lower values = smaller files = cheaper
-- `--no-preprocess` — send raw chunks (higher quality, higher cost)
+- **Preprocessing** (on by default) — chunks are downscaled to 480p at 5fps before embedding. This reduces upload size and token count but does not reduce the number of API calls, so it primarily improves speed rather than cost.
+- **Still-frame skipping** (on by default) — chunks with no meaningful visual change (e.g. a parked car) are skipped entirely. This saves real API calls and directly reduces cost. The savings depend on your footage — Sentry Mode recordings with hours of idle time benefit the most, while action-packed driving footage may have nothing to skip.
+
+Search queries are negligible (text embedding only).
+
+Tuning options:
+
+- `--chunk-duration` / `--overlap` — longer chunks with less overlap = fewer API calls = lower cost
 - `--no-skip-still` — embed every chunk even if nothing is happening
-- `--chunk-duration` / `--overlap` — longer chunks with less overlap = fewer API calls
+- `--target-resolution` / `--target-fps` — adjust preprocessing quality
+- `--no-preprocess` — send raw chunks to the API
 
 ## Limitations & Future Work
 
