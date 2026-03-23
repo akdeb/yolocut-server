@@ -1,5 +1,6 @@
 """Video chunking logic."""
 
+import functools
 import json
 import os
 import re
@@ -9,15 +10,40 @@ import tempfile
 from pathlib import Path
 
 
+def _ffmpeg_runs(path: str) -> bool:
+    """Return True if *path* can write a trivial output file.
+
+    A simple ``-version`` check is not enough — snap-sandboxed ffmpeg
+    exits 0 for ``-version`` but cannot access the real filesystem.
+    """
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            probe_path = tmp.name
+        try:
+            result = subprocess.run(
+                [path, "-y", "-f", "lavfi", "-i", "nullsrc=s=2x2:d=0.1",
+                 "-frames:v", "1", probe_path],
+                capture_output=True,
+                timeout=5,
+            )
+            return result.returncode == 0 and os.path.getsize(probe_path) > 0
+        finally:
+            os.unlink(probe_path)
+    except Exception:
+        return False
+
+
+@functools.lru_cache(maxsize=1)
 def _get_ffmpeg_executable() -> str:
     """Return a usable ffmpeg executable path.
 
     Search order:
-    1. System ffmpeg on PATH
+    1. System ffmpeg on PATH (only if it actually runs — e.g. snap
+       sandboxed binaries are skipped)
     2. imageio-ffmpeg bundled binary (if installed)
     """
     system_ffmpeg = shutil.which("ffmpeg")
-    if system_ffmpeg:
+    if system_ffmpeg and _ffmpeg_runs(system_ffmpeg):
         return system_ffmpeg
 
     try:
