@@ -6,7 +6,7 @@ Semantic search over dashcam footage. Type what you're looking for, get a trimme
 
 ## How it works
 
-sentrysearch splits your dashcam videos into overlapping chunks, embeds each chunk directly as video using Google's Gemini Embedding model, and stores the vectors in a local ChromaDB database. When you search, your text query is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
+SentrySearch splits your dashcam videos into overlapping chunks, embeds each chunk directly as video using Google's Gemini Embedding model, and stores the vectors in a local ChromaDB database. When you search, your text query is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
 
 ## Getting Started
 
@@ -66,7 +66,14 @@ Indexing file 1/3: front_2024-01-15_14-30.mp4 [chunk 2/4]
 Indexed 12 new chunks from 3 files. Total: 12 chunks from 3 files.
 ```
 
-Options: `--chunk-duration 30` (seconds per chunk), `--overlap 5` (overlap between chunks).
+Options:
+
+- `--chunk-duration 30` — seconds per chunk
+- `--overlap 5` — overlap between chunks
+- `--no-preprocess` — skip downscaling/frame rate reduction (send raw chunks)
+- `--target-resolution 480` — target height in pixels for preprocessing
+- `--target-fps 5` — target frame rate for preprocessing
+- `--no-skip-still` — embed all chunks, even ones with no visual change
 
 ### Search
 
@@ -99,12 +106,19 @@ Gemini Embedding 2 can natively embed video — raw video pixels are projected i
 
 ## Cost
 
-Indexing 1 hour of footage costs ~$2.50 with Gemini's embedding API. This is with default settings (30s chunks, 5s overlap). Costs can be reduced by increasing chunk duration or decreasing overlap. Search queries are negligible (text embedding only).
+By default, chunks are automatically downscaled to 480p at 5fps and still-frame chunks (e.g. a parked car with no activity) are skipped entirely before embedding. This significantly reduces the amount of data sent to the API compared to raw footage.
+
+Cost can be further tuned with:
+
+- `--target-resolution` / `--target-fps` — lower values = smaller files = cheaper
+- `--no-preprocess` — send raw chunks (higher quality, higher cost)
+- `--no-skip-still` — embed every chunk even if nothing is happening
+- `--chunk-duration` / `--overlap` — longer chunks with less overlap = fewer API calls
 
 ## Limitations & Future Work
 
-- **Indexing cost can be optimized** — currently every chunk is embedded regardless of content. Skipping still frames, reducing frame rate before embedding, or using smarter chunking (scene detection) could significantly reduce API calls and cost.
-- **Search quality depends on chunk boundaries** — if an event spans two chunks, the overlapping window helps but isn't perfect.
+- **Still-frame detection is heuristic** — it uses JPEG file size comparison across sampled frames. It may occasionally skip chunks with subtle motion or embed chunks that are truly static. Disable with `--no-skip-still` if you need every chunk indexed.
+- **Search quality depends on chunk boundaries** — if an event spans two chunks, the overlapping window helps but isn't perfect. Smarter chunking (e.g. scene detection) could improve this.
 - **Gemini Embedding 2 is in preview** — API behavior and pricing may change.
 
 ## Compatibility
