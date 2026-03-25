@@ -88,7 +88,15 @@ $ sentrysearch search "red truck running a stop sign"
 Saved clip: ./match_front_2024-01-15_14-30_02m15s-02m45s.mp4
 ```
 
-Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming.
+If the best result's similarity score is below the confidence threshold (default 0.35), you'll be prompted before trimming:
+
+```
+No confident match found (best score: 0.28). Show results anyway? [y/N]:
+```
+
+With `--no-trim`, low-confidence results are shown with a note instead of a prompt.
+
+Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff.
 
 ### Stats
 
