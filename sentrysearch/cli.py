@@ -191,6 +191,9 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
             if verbose:
                 click.echo(f"  [verbose] {basename}: duration split into {num_chunks} chunks", err=True)
 
+            # Track files to clean up after processing
+            files_to_cleanup = []
+
             for chunk_idx, chunk in enumerate(chunks, 1):
                 if skip_still and is_still_frame_chunk(
                     chunk["chunk_path"], verbose=verbose,
@@ -222,9 +225,21 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                             f"({100 * (1 - new_size / original_size):.0f}% reduction)",
                             err=True,
                         )
+                    # Track preprocessed file for cleanup
+                    if embed_path != chunk["chunk_path"]:
+                        files_to_cleanup.append(embed_path)
 
                 embedding = embed_video_chunk(embed_path, verbose=verbose)
                 embedded.append({**chunk, "embedding": embedding})
+                # Clean up chunk file after embedding
+                files_to_cleanup.append(chunk["chunk_path"])
+
+            # Clean up temporary chunk files
+            for f in files_to_cleanup:
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
 
             if embedded:
                 store.add_chunks(embedded)
