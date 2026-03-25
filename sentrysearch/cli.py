@@ -255,8 +255,10 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
               help="Directory to save trimmed clips.")
 @click.option("--trim/--no-trim", default=True, show_default=True,
               help="Auto-trim the top result.")
+@click.option("--threshold", default=0.41, show_default=True, type=float,
+              help="Minimum similarity score to consider a confident match.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def search(query, n_results, output_dir, trim, verbose):
+def search(query, n_results, output_dir, trim, threshold, verbose):
     """Search indexed footage with a natural language QUERY."""
     from .search import search_footage
     from .store import SentryStore
@@ -273,6 +275,9 @@ def search(query, n_results, output_dir, trim, verbose):
             )
             return
 
+        if verbose:
+            click.echo(f"  [verbose] similarity threshold: {threshold}", err=True)
+
         results = search_footage(query, store, n_results=n_results, verbose=verbose)
 
         if not results:
@@ -284,6 +289,16 @@ def search(query, n_results, output_dir, trim, verbose):
                 "  - Check `sentrysearch stats` to see what's indexed"
             )
             return
+
+        best_score = results[0]["similarity_score"]
+        low_confidence = best_score < threshold
+
+        if low_confidence and not trim:
+            click.secho(
+                f"(low confidence — best score: {best_score:.2f})",
+                fg="yellow",
+                err=True,
+            )
 
         for i, r in enumerate(results, 1):
             basename = os.path.basename(r["source_file"])
@@ -302,6 +317,14 @@ def search(query, n_results, output_dir, trim, verbose):
                 )
 
         if trim:
+            if low_confidence:
+                if not click.confirm(
+                    f"No confident match found (best score: {best_score:.2f}). "
+                    "Show results anyway?",
+                    default=False,
+                ):
+                    return
+
             from .trimmer import trim_top_result
             clip_path = trim_top_result(results, output_dir)
             click.echo(f"\nSaved clip: {clip_path}")
