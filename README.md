@@ -108,11 +108,16 @@ Gemini Embedding 2 can natively embed video — raw video pixels are projected i
 
 ## Cost
 
-Indexing 1 hour of footage costs ~$2.50 with Gemini's embedding API (default settings: 30s chunks, 5s overlap). The API bills by video duration, so this cost is driven by the number of chunks, not file size.
+Indexing 1 hour of footage costs ~$2.84 with Gemini's embedding API (default settings: 30s chunks, 5s overlap):
+
+> 1 hour = 3,600 seconds of video = 3,600 frames processed by the model.
+> 3,600 frames × $0.00079 = ~$2.84/hr
+
+The Gemini API natively extracts and tokenizes exactly 1 frame per second from uploaded video, regardless of the file's actual frame rate. The preprocessing step (which downscales chunks to 480p at 5fps via ffmpeg) is a local/bandwidth optimization — it keeps payload sizes small so API requests are fast and don't timeout — but does not change the number of frames the API processes.
 
 Two built-in optimizations help reduce costs in different ways:
 
-- **Preprocessing** (on by default) — chunks are downscaled to 480p at 5fps before embedding. This reduces upload size and token count but does not reduce the number of API calls, so it primarily improves speed rather than cost.
+- **Preprocessing** (on by default) — chunks are downscaled to 480p at 5fps before uploading. Since the API processes at 1fps regardless, this only reduces upload size and transfer time, not the number of frames billed. It primarily improves speed and prevents request timeouts.
 - **Still-frame skipping** (on by default) — chunks with no meaningful visual change (e.g. a parked car) are skipped entirely. This saves real API calls and directly reduces cost. The savings depend on your footage — Sentry Mode recordings with hours of idle time benefit the most, while action-packed driving footage may have nothing to skip.
 
 Search queries are negligible (text embedding only).
