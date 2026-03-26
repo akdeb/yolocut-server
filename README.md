@@ -17,8 +17,7 @@ SentrySearch splits your mp4 videos into overlapping chunks, embeds each chunk d
 ```bash
 git clone https://github.com/ssrajadh/sentrysearch.git
 cd sentrysearch
-python -m venv venv && source venv/bin/activate
-pip install -e .
+uv sync
 ```
 
 2. Set up your API key:
@@ -123,7 +122,7 @@ Requirements:
 Install with Tesla overlay support:
 
 ```bash
-pip install -e ".[tesla]"
+uv sync --extra tesla
 ```
 
 Without geopy, the overlay still works but omits the city/road name.
@@ -181,6 +180,6 @@ This works with any footage in mp4 format, not just Tesla Sentry Mode. The direc
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - `ffmpeg` on PATH, or use bundled ffmpeg via `imageio-ffmpeg` (installed by default)
 - Gemini API key ([get one free](https://aistudio.google.com/apikey))
