@@ -12,16 +12,22 @@ SentrySearch splits your mp4 videos into overlapping chunks, embeds each chunk a
 
 ## Getting Started
 
-1. Clone and install:
+1. Install [uv](https://docs.astral.sh/uv/) (if you don't have it):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh    # macOS/Linux
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
+```
+
+2. Clone and install:
 
 ```bash
 git clone https://github.com/ssrajadh/sentrysearch.git
 cd sentrysearch
-python -m venv venv && source venv/bin/activate
-pip install -e .
+uv sync
 ```
 
-2. Set up your API key:
+3. Set up your API key:
 
 ```bash
 sentrysearch init
@@ -29,13 +35,13 @@ sentrysearch init
 
 This prompts for your Gemini API key, writes it to `.env`, and validates it with a test embedding.
 
-3. Index your footage:
+4. Index your footage:
 
 ```bash
 sentrysearch index /path/to/dashcam/footage
 ```
 
-4. Search:
+5. Search:
 
 ```bash
 sentrysearch search "red truck running a stop sign"
@@ -123,7 +129,7 @@ Requirements:
 Install with Tesla overlay support:
 
 ```bash
-pip install -e ".[tesla]"
+uv sync --extra tesla
 ```
 
 Without geopy, the overlay still works but omits the city/road name.
@@ -207,7 +213,7 @@ This works with any footage in mp4 format, not just Tesla Sentry Mode. The direc
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - `ffmpeg` on PATH, or use bundled ffmpeg via `imageio-ffmpeg` (installed by default)
 - **Gemini backend:** Gemini API key ([get one free](https://aistudio.google.com/apikey))
 - **Local backend:** GPU with CUDA or Apple Metal recommended; `pip install -e ".[local]"`
