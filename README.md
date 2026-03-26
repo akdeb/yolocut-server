@@ -1,6 +1,6 @@
 # SentrySearch
 
-Semantic search over dashcam footage. Type what you're looking for, get a trimmed clip back.
+Semantic search over video footage. Type what you're looking for, get a trimmed clip back.
 
 [ClawHub Skill](https://clawhub.ai/ssrajadh/natural-language-video-search)
 
@@ -8,7 +8,7 @@ Semantic search over dashcam footage. Type what you're looking for, get a trimme
 
 ## How it works
 
-SentrySearch splits your dashcam videos into overlapping chunks, embeds each chunk directly as video using Google's Gemini Embedding model, and stores the vectors in a local ChromaDB database. When you search, your text query is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
+SentrySearch splits your mp4 videos into overlapping chunks, embeds each chunk directly as video using Google's Gemini Embedding model, and stores the vectors in a local ChromaDB database. When you search, your text query is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
 
 ## Getting Started
 
@@ -61,7 +61,7 @@ If a key is already configured, you'll be asked whether to overwrite it.
 ### Index footage
 
 ```bash
-$ sentrysearch index /path/to/dashcam/footage
+$ sentrysearch index /path/to/video/footage
 Indexing file 1/3: front_2024-01-15_14-30.mp4 [chunk 1/4]
 Indexing file 1/3: front_2024-01-15_14-30.mp4 [chunk 2/4]
 ...
@@ -127,6 +127,8 @@ pip install -e ".[tesla]"
 ```
 
 Without geopy, the overlay still works but omits the city/road name.
+
+Source: [teslamotors/dashcam](https://github.com/teslamotors/dashcam)
 
 ### Stats
 
