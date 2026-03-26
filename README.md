@@ -143,9 +143,9 @@ Index and search using a local Qwen3-VL-Embedding model instead of the Gemini AP
 Install dependencies:
 
 ```bash
-pip install -e ".[local]"
+uv sync --extra local
 # For 4-bit quantization (lower VRAM usage):
-pip install -e ".[local-quantized]"
+uv sync --extra local-quantized
 ```
 
 Index and search with `--backend local`:
@@ -216,4 +216,4 @@ This works with any footage in mp4 format, not just Tesla Sentry Mode. The direc
 - Python 3.11+
 - `ffmpeg` on PATH, or use bundled ffmpeg via `imageio-ffmpeg` (installed by default)
 - **Gemini backend:** Gemini API key ([get one free](https://aistudio.google.com/apikey))
-- **Local backend:** GPU with CUDA or Apple Metal recommended; `pip install -e ".[local]"`
+- **Local backend:** GPU with CUDA or Apple Metal recommended; `uv sync --extra local`

@@ -58,7 +58,7 @@ def _handle_error(e: Exception) -> None:
             "Install it with one of:\n"
             "  Ubuntu/Debian:  sudo apt install ffmpeg\n"
             "  macOS:          brew install ffmpeg\n"
-            "  pip fallback:   pip install imageio-ffmpeg",
+            "  pip fallback:   uv add imageio-ffmpeg",
             fg="red",
             err=True,
         )
@@ -98,7 +98,7 @@ def _apply_overlay_to_clip(
         if location is None:
             click.secho(
                 "Geocoding failed — continuing without location. "
-                "Install deps with: pip install -e '.[tesla]'",
+                "Install deps with: uv sync --extra tesla",
                 fg="yellow", err=True,
             )
 

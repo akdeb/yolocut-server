@@ -48,8 +48,8 @@ class LocalEmbedder(BaseEmbedder):
         except ImportError as e:
             raise LocalModelError(
                 f"Missing dependencies for local backend: {e}\n\n"
-                "Install with: pip install -e '.[local]'\n"
-                "For 4-bit quantization: pip install -e '.[local-quantized]'"
+                "Install with: uv sync --extra local\n"
+                "For 4-bit quantization: uv sync --extra local-quantized"
             ) from e
 
         print(
