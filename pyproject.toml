@@ -16,12 +16,14 @@ dependencies = [
 tesla = ["geopy"]
 local = [
     "torch>=2.0",
+    "torchvision>=0.15",
     "transformers>=4.45",
     "accelerate",
     "qwen-vl-utils",
 ]
 local-quantized = [
     "torch>=2.0",
+    "torchvision>=0.15",
     "transformers>=4.45",
     "accelerate",
     "qwen-vl-utils",
