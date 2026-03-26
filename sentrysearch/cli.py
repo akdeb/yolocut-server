@@ -202,6 +202,8 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                         f"Skipping chunk {chunk_idx}/{num_chunks} (still frame)"
                     )
                     skipped_chunks += 1
+                    # Clean up the skipped chunk file
+                    files_to_cleanup.append(chunk["chunk_path"])
                     continue
 
                 click.echo(
@@ -240,6 +242,11 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                     os.unlink(f)
                 except OSError:
                     pass
+
+            # Clean up the temporary directory containing chunks
+            if chunks:
+                tmp_dir = os.path.dirname(chunks[0]["chunk_path"])
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
             if embedded:
                 store.add_chunks(embedded)
