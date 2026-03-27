@@ -38,7 +38,7 @@ class TestParseDuration:
 
     def test_ffmpeg_error_message_raised(self):
         stderr = "test.mp4: No such file or directory"
-        with pytest.raises(RuntimeError, match="No such file"):
+        with pytest.raises(FileNotFoundError, match="Video file not found"):
             _parse_duration_from_ffmpeg_output(stderr)
 
 

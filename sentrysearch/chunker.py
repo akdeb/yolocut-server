@@ -64,7 +64,9 @@ def _parse_duration_from_ffmpeg_output(stderr_text: str) -> float:
         # Surface ffmpeg's own error (e.g. "No such file or directory")
         for line in stderr_text.splitlines():
             lower = line.lower()
-            if "error" in lower or "no such file" in lower:
+            if "no such file" in lower:
+                raise FileNotFoundError(f"Video file not found: {line.strip()}")
+            if "error" in lower:
                 raise RuntimeError(f"ffmpeg error: {line.strip()}")
         raise RuntimeError("Could not determine video duration from ffmpeg output.")
 
