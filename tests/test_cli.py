@@ -69,7 +69,8 @@ class TestIndexCommand:
     def test_index_no_mp4s(self, runner, tmp_path):
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()):
             MockStore.return_value = MagicMock()
             result = runner.invoke(cli, ["index", str(empty_dir)])
             assert result.exit_code == 0
@@ -78,7 +79,8 @@ class TestIndexCommand:
     def test_index_accepts_backend_option(self, runner, tmp_path):
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()):
             MockStore.return_value = MagicMock()
             result = runner.invoke(cli, ["index", str(empty_dir), "--backend", "local"])
             assert result.exit_code == 0
