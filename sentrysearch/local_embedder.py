@@ -52,10 +52,21 @@ class LocalEmbedder(BaseEmbedder):
                 "For 4-bit quantization: uv sync --extra local-quantized"
             ) from e
 
-        print(
-            f"Loading {self._model_name} (first run downloads the model)...",
-            file=sys.stderr,
-        )
+        # Check if model is already cached locally
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            cached = try_to_load_from_cache(self._model_name, "config.json")
+            is_cached = cached is not None and not isinstance(cached, str) or (isinstance(cached, str) and os.path.exists(cached))
+        except Exception:
+            is_cached = False
+
+        if is_cached:
+            print(f"Loading {self._model_name}...", file=sys.stderr)
+        else:
+            print(
+                f"Downloading {self._model_name} (this only happens once)...",
+                file=sys.stderr,
+            )
 
         # Determine device and dtype
         if torch.cuda.is_available():
@@ -239,7 +250,6 @@ class LocalEmbedder(BaseEmbedder):
             video_metadata=video_metadata,
             return_tensors="pt",
             padding=True,
-            do_resize=False,
             **video_kwargs,
         )
         # Remove mm_token_type_ids to avoid transformers 5.x shape mismatch
