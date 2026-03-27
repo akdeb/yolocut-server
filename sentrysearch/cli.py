@@ -52,7 +52,10 @@ def _handle_error(e: Exception) -> None:
     if isinstance(e, PermissionError):
         click.secho("Error: " + str(e), fg="red", err=True)
         raise SystemExit(1)
-    if isinstance(e, RuntimeError) and "ffmpeg" in str(e).lower():
+    if isinstance(e, FileNotFoundError):
+        click.secho("Error: " + str(e), fg="red", err=True)
+        raise SystemExit(1)
+    if isinstance(e, RuntimeError) and "ffmpeg not found" in str(e).lower():
         click.secho(
             "Error: ffmpeg is not available.\n\n"
             "Install it with one of:\n"
