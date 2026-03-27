@@ -8,11 +8,13 @@ version: 0.2.0
 metadata:
   clawdbot:
     requires:
+      env:
+        - GEMINI_API_KEY
       bins:
         - python3
         - uv
-    optionalEnv:
-      - GEMINI_API_KEY
+        - ffmpeg
+    primaryEnv: GEMINI_API_KEY
     homepage: https://github.com/ssrajadh/sentrysearch
     emoji: "🎥"
 ---
