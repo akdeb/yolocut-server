@@ -87,6 +87,7 @@ class LocalEmbedder(BaseEmbedder):
         quantization_config = None
         if device == "cuda":
             try:
+                import bitsandbytes  # noqa: F401
                 from transformers import BitsAndBytesConfig
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
