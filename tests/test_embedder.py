@@ -165,3 +165,29 @@ class TestEmbedderFactory:
             result = embed_video_chunk(tiny_video)
             assert result == fake_values
             assert len(result) == 768
+
+    @patch("google.genai.Client")
+    def test_get_embedder_caches_instance(self, mock_client_cls):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            e1 = get_embedder("gemini")
+            e2 = get_embedder("gemini")
+            assert e1 is e2
+
+    @patch("google.genai.Client")
+    def test_reset_clears_cache(self, mock_client_cls):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            e1 = get_embedder("gemini")
+            reset_embedder()
+            e2 = get_embedder("gemini")
+            assert e1 is not e2
+
+    def test_get_embedder_local_backend(self):
+        with patch("sentrysearch.local_embedder.LocalEmbedder") as MockLocal:
+            mock_instance = MagicMock()
+            MockLocal.return_value = mock_instance
+            reset_embedder()
+            result = get_embedder("local", model="test-model", dimensions=512)
+            MockLocal.assert_called_once_with(model_name="test-model", dimensions=512)
+            assert result is mock_instance
