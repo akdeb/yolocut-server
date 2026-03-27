@@ -9,6 +9,38 @@ import chromadb
 
 DEFAULT_DB_PATH = Path.home() / ".sentrysearch" / "db"
 
+# Backend → collection name mapping
+_COLLECTION_NAMES = {
+    "gemini": "dashcam_chunks",
+    "local": "dashcam_chunks_local",
+}
+
+
+class BackendMismatchError(RuntimeError):
+    """Raised when search backend doesn't match the indexed backend."""
+
+
+def detect_backend(db_path: str | Path | None = None) -> str | None:
+    """Return the backend that has indexed data, or None if empty.
+
+    If both backends have data, returns 'gemini' (the default).
+    """
+    db_path = str(db_path or DEFAULT_DB_PATH)
+    if not Path(db_path).exists():
+        return None
+    client = chromadb.PersistentClient(path=db_path)
+    existing = {c.name for c in client.list_collections()}
+    # Check gemini first (default/legacy)
+    if "dashcam_chunks" in existing:
+        col = client.get_collection("dashcam_chunks")
+        if col.count() > 0:
+            return "gemini"
+    if "dashcam_chunks_local" in existing:
+        col = client.get_collection("dashcam_chunks_local")
+        if col.count() > 0:
+            return "local"
+    return None
+
 
 def _make_chunk_id(source_file: str, start_time: float) -> str:
     """Deterministic chunk ID from source file + start time."""
@@ -19,18 +51,37 @@ def _make_chunk_id(source_file: str, start_time: float) -> str:
 class SentryStore:
     """Persistent vector store backed by ChromaDB."""
 
-    def __init__(self, db_path: str | Path | None = None):
+    def __init__(self, db_path: str | Path | None = None, backend: str = "gemini"):
         db_path = str(db_path or DEFAULT_DB_PATH)
         Path(db_path).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=db_path)
+        self._backend = backend
+        # Separate collection per backend so vectors never mix.
+        # Legacy collection "dashcam_chunks" (no suffix) is treated as gemini.
+        collection_name = "dashcam_chunks" if backend == "gemini" else f"dashcam_chunks_{backend}"
         self._collection = self._client.get_or_create_collection(
-            name="dashcam_chunks",
-            metadata={"hnsw:space": "cosine"},
+            name=collection_name,
+            metadata={"hnsw:space": "cosine", "embedding_backend": backend},
         )
 
     @property
     def collection(self) -> chromadb.Collection:
         return self._collection
+
+    def get_backend(self) -> str:
+        """Return the backend this index was built with."""
+        meta = self._collection.metadata or {}
+        return meta.get("embedding_backend", "gemini")
+
+    def check_backend(self, backend: str) -> None:
+        """Raise BackendMismatchError if *backend* doesn't match the index."""
+        indexed_backend = self.get_backend()
+        if indexed_backend != backend:
+            raise BackendMismatchError(
+                f"This index was built with the {indexed_backend} backend. "
+                f"Search with --backend {indexed_backend} or re-index with "
+                f"--backend {backend}."
+            )
 
     # ------------------------------------------------------------------
     # Write

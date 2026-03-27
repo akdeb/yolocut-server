@@ -69,8 +69,52 @@ class TestIndexCommand:
     def test_index_no_mp4s(self, runner, tmp_path):
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()):
             MockStore.return_value = MagicMock()
             result = runner.invoke(cli, ["index", str(empty_dir)])
             assert result.exit_code == 0
             assert "No mp4 files" in result.output or "No mp4" in result.output
+
+    def test_index_accepts_backend_option(self, runner, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()):
+            MockStore.return_value = MagicMock()
+            result = runner.invoke(cli, ["index", str(empty_dir), "--backend", "local"])
+            assert result.exit_code == 0
+
+
+class TestHandleError:
+    def test_local_model_error(self, runner):
+        from sentrysearch.local_embedder import LocalModelError
+
+        with patch("sentrysearch.store.SentryStore") as MockStore:
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+
+            with patch(
+                "sentrysearch.embedder.get_embedder",
+                side_effect=LocalModelError("no torch"),
+            ):
+                result = runner.invoke(cli, ["search", "test query", "--backend", "local"])
+                assert result.exit_code == 1
+                assert "no torch" in result.output
+
+    def test_backend_mismatch_error(self, runner):
+        from sentrysearch.store import BackendMismatchError
+
+        with patch("sentrysearch.store.SentryStore") as MockStore:
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+
+            with patch(
+                "sentrysearch.embedder.get_embedder",
+                side_effect=BackendMismatchError("built with gemini"),
+            ):
+                result = runner.invoke(cli, ["search", "test", "--backend", "local"])
+                assert result.exit_code == 1
+                assert "gemini" in result.output

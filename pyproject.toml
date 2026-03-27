@@ -14,6 +14,23 @@ dependencies = [
 
 [project.optional-dependencies]
 tesla = ["geopy"]
+local = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "transformers>=4.45",
+    "accelerate",
+    "qwen-vl-utils",
+    "decord",
+]
+local-quantized = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "transformers>=4.45",
+    "accelerate",
+    "qwen-vl-utils",
+    "decord",
+    "bitsandbytes",
+]
 
 [project.scripts]
 sentrysearch = "sentrysearch.cli:cli"

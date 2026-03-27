@@ -53,7 +53,7 @@ def _get_ffmpeg_executable() -> str:
     except Exception as exc:  # pragma: no cover - environment specific
         raise RuntimeError(
             "ffmpeg not found on PATH and imageio-ffmpeg is not available. "
-            "Install ffmpeg system-wide or `pip install imageio-ffmpeg`."
+            "Install ffmpeg system-wide or `uv add imageio-ffmpeg`."
         ) from exc
 
 

@@ -1,0 +1,328 @@
+"""Local video/text embedding using Qwen3-VL-Embedding.
+
+Uses the Qwen3VLForEmbedding model class adapted from the official
+Qwen3-VL-Embedding repository (Apache 2.0 license).
+Source: https://github.com/QwenLM/Qwen3-VL-Embedding
+"""
+
+import os
+import sys
+import time
+
+from .base_embedder import BaseEmbedder
+
+
+class LocalModelError(RuntimeError):
+    """Raised when the local model fails to load or run."""
+
+
+class LocalEmbedder(BaseEmbedder):
+    """Qwen3-VL-Embedding backend (local GPU inference)."""
+
+    def __init__(
+        self,
+        model_name: str = "Qwen/Qwen3-VL-Embedding-2B",
+        dimensions: int = 768,
+    ):
+        self._model_name = model_name
+        self._dimensions = dimensions
+        self._model = None
+        self._processor = None
+
+    def _load_model(self):
+        if self._model is not None:
+            return
+
+        try:
+            import torch
+            import torch.nn.functional as F  # noqa: F401
+            from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+                Qwen3VLPreTrainedModel,
+                Qwen3VLModel,
+                Qwen3VLConfig,
+            )
+            from transformers.models.qwen3_vl.processing_qwen3_vl import Qwen3VLProcessor
+            from transformers.cache_utils import Cache
+            from transformers.utils import TransformersKwargs
+            from transformers.processing_utils import Unpack
+        except ImportError as e:
+            raise LocalModelError(
+                f"Missing dependencies for local backend: {e}\n\n"
+                "Install with: uv sync --extra local\n"
+                "For 4-bit quantization: uv sync --extra local-quantized"
+            ) from e
+
+        # Check if model is already cached locally
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            cached = try_to_load_from_cache(self._model_name, "config.json")
+            is_cached = cached is not None and not isinstance(cached, str) or (isinstance(cached, str) and os.path.exists(cached))
+        except Exception:
+            is_cached = False
+
+        if is_cached:
+            print(f"Loading {self._model_name}...", file=sys.stderr)
+        else:
+            print(
+                f"Downloading {self._model_name} (this only happens once)...",
+                file=sys.stderr,
+            )
+
+        # Determine device and dtype
+        if torch.cuda.is_available():
+            device = "cuda"
+            dtype = torch.bfloat16
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+            dtype = torch.float16
+        else:
+            device = "cpu"
+            dtype = torch.float32
+            print(
+                "Warning: No GPU detected, local inference will be very slow.",
+                file=sys.stderr,
+            )
+
+        # Try 4-bit quantization if bitsandbytes is available and on CUDA
+        quantization_config = None
+        if device == "cuda":
+            try:
+                from transformers import BitsAndBytesConfig
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                )
+                print("Using 4-bit quantization (bitsandbytes)", file=sys.stderr)
+            except ImportError:
+                pass
+
+        # Build the model class dynamically to avoid top-level imports
+        _PreTrained = Qwen3VLPreTrainedModel
+        _Model = Qwen3VLModel
+        _Config = Qwen3VLConfig
+        _Cache = Cache
+        _TransformersKwargs = TransformersKwargs
+        _Unpack = Unpack
+
+        class _Qwen3VLForEmbedding(_PreTrained):
+            """Qwen3-VL wrapper that exposes last_hidden_state for pooling."""
+            config: _Config
+
+            def __init__(self, config):
+                super().__init__(config)
+                self.model = _Model(config)
+                self.post_init()
+
+            def get_input_embeddings(self):
+                return self.model.get_input_embeddings()
+
+            def set_input_embeddings(self, value):
+                self.model.set_input_embeddings(value)
+
+            def forward(
+                self,
+                input_ids=None,
+                attention_mask=None,
+                position_ids=None,
+                past_key_values=None,
+                inputs_embeds=None,
+                pixel_values=None,
+                pixel_values_videos=None,
+                image_grid_thw=None,
+                video_grid_thw=None,
+                cache_position=None,
+                **kwargs,
+            ):
+                return self.model(
+                    input_ids=input_ids,
+                    pixel_values=pixel_values,
+                    pixel_values_videos=pixel_values_videos,
+                    image_grid_thw=image_grid_thw,
+                    video_grid_thw=video_grid_thw,
+                    position_ids=position_ids,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    inputs_embeds=inputs_embeds,
+                    cache_position=cache_position,
+                    **kwargs,
+                )
+
+        try:
+            self._processor = Qwen3VLProcessor.from_pretrained(
+                self._model_name, padding_side="right",
+            )
+
+            load_kwargs = dict(trust_remote_code=True)
+            if quantization_config is not None:
+                load_kwargs["quantization_config"] = quantization_config
+            else:
+                load_kwargs["torch_dtype"] = dtype
+
+            self._model = _Qwen3VLForEmbedding.from_pretrained(
+                self._model_name, **load_kwargs,
+            )
+            if quantization_config is None:
+                self._model = self._model.to(device)
+            self._model.eval()
+            print(f"Model loaded on {device}", file=sys.stderr)
+
+        except Exception as e:
+            raise LocalModelError(f"Failed to load {self._model_name}: {e}") from e
+
+    @staticmethod
+    def _pooling_last(hidden_state, attention_mask):
+        """Pool at the last non-padded token position."""
+        import torch
+        flipped = attention_mask.flip(dims=[1])
+        last_pos = flipped.argmax(dim=1)
+        col = attention_mask.shape[1] - last_pos - 1
+        row = torch.arange(hidden_state.shape[0], device=hidden_state.device)
+        return hidden_state[row, col]
+
+    @staticmethod
+    def _truncate_and_normalize(embedding, target_dims):
+        """MRL dimension truncation: slice first N dims, then L2-normalize."""
+        import torch
+        import torch.nn.functional as F
+        truncated = embedding[:target_dims]
+        norm = torch.linalg.norm(truncated)
+        if norm > 0:
+            truncated = truncated / norm
+        return truncated.cpu().float().tolist()
+
+    def embed_video_chunk(self, chunk_path: str, verbose: bool = False) -> list[float]:
+        self._load_model()
+
+        import torch
+        import torch.nn.functional as F
+        from qwen_vl_utils import process_vision_info
+        from pathlib import Path
+
+        chunk_path = Path(chunk_path)
+        if not chunk_path.exists():
+            raise LocalModelError(f"Chunk file not found: {chunk_path}")
+
+        if verbose:
+            size_kb = os.path.getsize(chunk_path) / 1024
+            print(f"    [verbose] embedding {size_kb:.0f}KB chunk locally", file=sys.stderr)
+
+        t0 = time.monotonic()
+
+        conversation = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Represent the video for retrieval."}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video",
+                        "video": "file://" + str(chunk_path.resolve()),
+                        "fps": 1.0,
+                        "max_frames": 32,
+                    },
+                ],
+            },
+        ]
+
+        text = self._processor.apply_chat_template(
+            conversation, tokenize=False, add_generation_prompt=True,
+        )
+
+        images, video_inputs, video_kwargs = process_vision_info(
+            conversation,
+            return_video_metadata=True,
+            return_video_kwargs=True,
+        )
+
+        if video_inputs is not None:
+            videos, video_metadata = zip(*video_inputs)
+            videos = list(videos)
+            video_metadata = list(video_metadata)
+        else:
+            videos, video_metadata = None, None
+
+        inputs = self._processor(
+            text=[text],
+            images=images,
+            videos=videos,
+            video_metadata=video_metadata,
+            return_tensors="pt",
+            padding=True,
+            **video_kwargs,
+        )
+        # Remove mm_token_type_ids to avoid transformers 5.x shape mismatch
+        inputs.pop("mm_token_type_ids", None)
+        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = self._model(**inputs)
+            embeddings = self._pooling_last(
+                outputs.last_hidden_state, inputs["attention_mask"],
+            )
+            embeddings = F.normalize(embeddings, p=2, dim=-1)
+
+        result = self._truncate_and_normalize(embeddings[0], self._dimensions)
+        elapsed = time.monotonic() - t0
+
+        if verbose:
+            print(
+                f"    [verbose] dims={len(result)}, "
+                f"inference_time={elapsed:.2f}s",
+                file=sys.stderr,
+            )
+
+        return result
+
+    def embed_query(self, query_text: str, verbose: bool = False) -> list[float]:
+        self._load_model()
+
+        import torch
+        import torch.nn.functional as F
+
+        t0 = time.monotonic()
+
+        conversation = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Retrieve videos relevant to the query."}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": query_text}],
+            },
+        ]
+
+        prompt = self._processor.apply_chat_template(
+            conversation, tokenize=False, add_generation_prompt=True,
+        )
+
+        inputs = self._processor(
+            text=[prompt],
+            return_tensors="pt",
+            padding=True,
+        )
+        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = self._model(**inputs)
+            embeddings = self._pooling_last(
+                outputs.last_hidden_state, inputs["attention_mask"],
+            )
+            embeddings = F.normalize(embeddings, p=2, dim=-1)
+
+        result = self._truncate_and_normalize(embeddings[0], self._dimensions)
+        elapsed = time.monotonic() - t0
+
+        if verbose:
+            print(
+                f"  [verbose] query embedding: dims={len(result)}, "
+                f"inference_time={elapsed:.2f}s",
+                file=sys.stderr,
+            )
+
+        return result
+
+    def dimensions(self) -> int:
+        return self._dimensions

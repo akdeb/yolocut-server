@@ -8,7 +8,7 @@ Semantic search over video footage. Type what you're looking for, get a trimmed 
 
 ## How it works
 
-SentrySearch splits your mp4 videos into overlapping chunks, embeds each chunk directly as video using Google's Gemini Embedding model, and stores the vectors in a local ChromaDB database. When you search, your text query is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
+SentrySearch splits your mp4 videos into overlapping chunks, embeds each chunk as video using either Google's Gemini Embedding API or a local Qwen3-VL model, and stores the vectors in a local ChromaDB database. When you search, your text query is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
 
 ## Getting Started
 
@@ -136,12 +136,38 @@ Without geopy, the overlay still works but omits the city/road name.
 
 Source: [teslamotors/dashcam](https://github.com/teslamotors/dashcam)
 
+### Local Backend (no API key needed)
+
+Index and search using a local Qwen3-VL-Embedding model instead of the Gemini API. Free, private, and runs entirely on your machine.
+
+Install dependencies:
+
+```bash
+uv sync --extra local
+# For 4-bit quantization (lower VRAM usage):
+uv sync --extra local-quantized
+```
+
+Index and search with `--backend local`:
+
+```bash
+sentrysearch index /path/to/footage --backend local
+sentrysearch search "car running a red light" --backend local
+```
+
+Notes:
+- First run downloads the model (~4GB for 2B, ~16GB for 8B)
+- Requires a GPU for reasonable speed (CUDA or Apple Metal). CPU works but is very slow.
+- For better quality, use the 8B model: `--model Qwen/Qwen3-VL-Embedding-8B` (requires ~18GB VRAM)
+- Embeddings from Gemini and local backends are **not compatible** — an index built with one backend cannot be searched with the other. Re-index if you switch backends.
+
 ### Stats
 
 ```bash
 $ sentrysearch stats
 Total chunks:  47
 Source files:  12
+Backend:       gemini
 ```
 
 ### Verbose mode
@@ -150,7 +176,7 @@ Add `--verbose` to either command for debug info (embedding dimensions, API resp
 
 ## How is this possible?
 
-Gemini Embedding 2 can natively embed video — raw video pixels are projected into the same 768-dimensional vector space as text queries. There's no transcription, no frame captioning, no text middleman. A text query like "red truck at a stop sign" is directly comparable to a 30-second video clip at the vector level. This is what makes sub-second semantic search over hours of footage practical.
+Both Gemini Embedding 2 and Qwen3-VL-Embedding can natively embed video — raw video pixels are projected into the same vector space as text queries. There's no transcription, no frame captioning, no text middleman. A text query like "red truck at a stop sign" is directly comparable to a 30-second video clip at the vector level. This is what makes sub-second semantic search over hours of footage practical.
 
 ## Cost
 
@@ -189,4 +215,5 @@ This works with any footage in mp4 format, not just Tesla Sentry Mode. The direc
 
 - Python 3.11+
 - `ffmpeg` on PATH, or use bundled ffmpeg via `imageio-ffmpeg` (installed by default)
-- Gemini API key ([get one free](https://aistudio.google.com/apikey))
+- **Gemini backend:** Gemini API key ([get one free](https://aistudio.google.com/apikey))
+- **Local backend:** GPU with CUDA or Apple Metal recommended; `uv sync --extra local`

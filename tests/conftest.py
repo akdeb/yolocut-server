@@ -15,13 +15,9 @@ def _reset_embedder_globals():
     """Reset embedder module-level state so tests don't leak."""
     import sentrysearch.embedder as emb
 
-    original_client = emb._client
-    original_limiter = emb._limiter
-    emb._client = None
-    emb._limiter = emb._RateLimiter(max_per_minute=9999)
+    emb.reset_embedder()
     yield
-    emb._client = original_client
-    emb._limiter = original_limiter
+    emb.reset_embedder()
 
 
 @pytest.fixture(autouse=True)

@@ -33,13 +33,21 @@ def _open_file(path: str) -> None:
 
 def _handle_error(e: Exception) -> None:
     """Print a user-friendly error and exit."""
-    from .embedder import GeminiAPIKeyError, GeminiQuotaError
+    from .gemini_embedder import GeminiAPIKeyError, GeminiQuotaError
+    from .local_embedder import LocalModelError
+    from .store import BackendMismatchError
 
     if isinstance(e, GeminiAPIKeyError):
         click.secho("Error: " + str(e), fg="red", err=True)
         raise SystemExit(1)
     if isinstance(e, GeminiQuotaError):
         click.secho("Error: " + str(e), fg="yellow", err=True)
+        raise SystemExit(1)
+    if isinstance(e, LocalModelError):
+        click.secho("Error: " + str(e), fg="red", err=True)
+        raise SystemExit(1)
+    if isinstance(e, BackendMismatchError):
+        click.secho("Error: " + str(e), fg="red", err=True)
         raise SystemExit(1)
     if isinstance(e, PermissionError):
         click.secho("Error: " + str(e), fg="red", err=True)
@@ -50,7 +58,7 @@ def _handle_error(e: Exception) -> None:
             "Install it with one of:\n"
             "  Ubuntu/Debian:  sudo apt install ffmpeg\n"
             "  macOS:          brew install ffmpeg\n"
-            "  pip fallback:   pip install imageio-ffmpeg",
+            "  pip fallback:   uv add imageio-ffmpeg",
             fg="red",
             err=True,
         )
@@ -90,7 +98,7 @@ def _apply_overlay_to_clip(
         if location is None:
             click.secho(
                 "Geocoding failed — continuing without location. "
-                "Install deps with: pip install -e '.[tesla]'",
+                "Install deps with: uv sync --extra tesla",
                 fg="yellow", err=True,
             )
 
@@ -158,9 +166,10 @@ def init():
     os.environ["GEMINI_API_KEY"] = api_key
     click.echo("Validating API key...")
     try:
-        from .embedder import embed_query
+        from .embedder import get_embedder
 
-        vec = embed_query("test")
+        embedder = get_embedder("gemini")
+        vec = embedder.embed_query("test")
         if len(vec) != 768:
             click.secho(
                 f"Unexpected embedding dimension: {len(vec)} (expected 768). "
@@ -201,14 +210,21 @@ def init():
               help="Target frames per second for preprocessing.")
 @click.option("--skip-still/--no-skip-still", default=True, show_default=True,
               help="Skip chunks with no meaningful visual change.")
+@click.option("--backend", type=click.Choice(["gemini", "local"]), default="gemini",
+              show_default=True, help="Embedding backend to use.")
+@click.option("--model", default="Qwen/Qwen3-VL-Embedding-2B", show_default=True,
+              help="HuggingFace model ID for local backend.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def index(directory, chunk_duration, overlap, preprocess, target_resolution, target_fps, skip_still, verbose):
+def index(directory, chunk_duration, overlap, preprocess, target_resolution,
+          target_fps, skip_still, backend, model, verbose):
     """Index mp4 files in DIRECTORY for searching."""
     from .chunker import chunk_video, is_still_frame_chunk, preprocess_chunk, scan_directory
-    from .embedder import embed_video_chunk
+    from .embedder import get_embedder, reset_embedder
     from .store import SentryStore
 
     try:
+        embedder = get_embedder(backend, model=model)
+
         if os.path.isfile(directory):
             videos = [os.path.abspath(directory)]
         else:
@@ -218,7 +234,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
             click.echo("No mp4 files found.")
             return
 
-        store = SentryStore()
+        store = SentryStore(backend=backend)
         total_files = len(videos)
         new_files = 0
         new_chunks = 0
@@ -226,7 +242,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
 
         if verbose:
             click.echo(f"[verbose] DB path: {store._client._identifier}", err=True)
-            click.echo(f"[verbose] chunk_duration={chunk_duration}s, overlap={overlap}s", err=True)
+            click.echo(f"[verbose] backend={backend}, chunk_duration={chunk_duration}s, overlap={overlap}s", err=True)
 
         for file_idx, video_path in enumerate(videos, 1):
             abs_path = os.path.abspath(video_path)
@@ -283,7 +299,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
                     if embed_path != chunk["chunk_path"]:
                         files_to_cleanup.append(embed_path)
 
-                embedding = embed_video_chunk(embed_path, verbose=verbose)
+                embedding = embedder.embed_video_chunk(embed_path, verbose=verbose)
                 embedded.append({**chunk, "embedding": embedding})
                 # Clean up chunk file after embedding
                 files_to_cleanup.append(chunk["chunk_path"])
@@ -315,6 +331,8 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
 
     except Exception as e:
         _handle_error(e)
+    finally:
+        reset_embedder()
 
 
 # -----------------------------------------------------------------------
@@ -333,16 +351,25 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution, tar
               help="Minimum similarity score to consider a confident match.")
 @click.option("--overlay/--no-overlay", default=False, show_default=True,
               help="Burn Tesla telemetry overlay (speed, GPS, turn signals) onto trimmed clip.")
+@click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
+              help="Embedding backend (auto-detected from index if omitted).")
+@click.option("--model", default="Qwen/Qwen3-VL-Embedding-2B", show_default=True,
+              help="HuggingFace model ID for local backend.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def search(query, n_results, output_dir, trim, threshold, overlay, verbose):
+def search(query, n_results, output_dir, trim, threshold, overlay, backend, model, verbose):
     """Search indexed footage with a natural language QUERY."""
+    from .embedder import get_embedder, reset_embedder
     from .search import search_footage
-    from .store import SentryStore
+    from .store import SentryStore, detect_backend
 
     output_dir = os.path.expanduser(output_dir)
 
     try:
-        store = SentryStore()
+        # Auto-detect backend from whichever collection has data
+        if backend is None:
+            backend = detect_backend() or "gemini"
+
+        store = SentryStore(backend=backend)
 
         if store.get_stats()["total_chunks"] == 0:
             click.echo(
@@ -351,8 +378,10 @@ def search(query, n_results, output_dir, trim, threshold, overlay, verbose):
             )
             return
 
+        get_embedder(backend, model=model)
+
         if verbose:
-            click.echo(f"  [verbose] similarity threshold: {threshold}", err=True)
+            click.echo(f"  [verbose] backend={backend}, similarity threshold: {threshold}", err=True)
 
         results = search_footage(query, store, n_results=n_results, verbose=verbose)
 
@@ -416,6 +445,8 @@ def search(query, n_results, output_dir, trim, threshold, overlay, verbose):
 
     except Exception as e:
         _handle_error(e)
+    finally:
+        reset_embedder()
 
 
 # -----------------------------------------------------------------------
@@ -471,6 +502,7 @@ def stats():
 
     click.echo(f"Total chunks:  {s['total_chunks']}")
     click.echo(f"Source files:  {s['unique_source_files']}")
+    click.echo(f"Backend:       {store.get_backend()}")
     click.echo("\nIndexed files:")
     for f in s["source_files"]:
         click.echo(f"  {f}")

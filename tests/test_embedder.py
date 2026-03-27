@@ -1,4 +1,4 @@
-"""Tests for sentrysearch.embedder."""
+"""Tests for sentrysearch embedder (factory + gemini backend)."""
 
 import os
 import time
@@ -6,14 +6,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sentrysearch.embedder import (
+from sentrysearch.gemini_embedder import (
     GeminiAPIKeyError,
+    GeminiEmbedder,
     GeminiQuotaError,
     _RateLimiter,
-    _get_client,
     _retry,
+)
+from sentrysearch.embedder import (
     embed_query,
     embed_video_chunk,
+    get_embedder,
+    reset_embedder,
 )
 
 
@@ -33,8 +37,8 @@ class TestRateLimiter:
             limiter.wait()
         assert len(limiter._timestamps) == 3
 
-    @patch("sentrysearch.embedder.time.sleep")
-    @patch("sentrysearch.embedder.time.monotonic")
+    @patch("sentrysearch.gemini_embedder.time.sleep")
+    @patch("sentrysearch.gemini_embedder.time.monotonic")
     def test_sleeps_when_limit_reached(self, mock_monotonic, mock_sleep):
         limiter = _RateLimiter(max_per_minute=2)
         # First two at t=0 and t=1
@@ -56,22 +60,20 @@ class TestRateLimiter:
 
 
 # ---------------------------------------------------------------------------
-# _get_client
+# GeminiEmbedder construction
 # ---------------------------------------------------------------------------
 
-class TestGetClient:
+class TestGeminiEmbedder:
     def test_raises_without_api_key(self):
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("GEMINI_API_KEY", None)
             with pytest.raises(GeminiAPIKeyError, match="GEMINI_API_KEY"):
-                _get_client()
+                GeminiEmbedder()
 
-    @patch("sentrysearch.embedder.genai.Client")
+    @patch("google.genai.Client")
     def test_creates_client_with_key(self, mock_client_cls):
         with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-123"}):
-            import sentrysearch.embedder as emb
-            emb._client = None  # force re-creation
-            client = _get_client()
+            embedder = GeminiEmbedder()
             mock_client_cls.assert_called_once_with(api_key="test-key-123")
 
 
@@ -85,7 +87,7 @@ class TestRetry:
         assert _retry(fn, max_retries=3, initial_delay=0.01) == "ok"
         fn.assert_called_once()
 
-    @patch("sentrysearch.embedder.time.sleep")
+    @patch("sentrysearch.gemini_embedder.time.sleep")
     def test_retries_on_429(self, mock_sleep):
         exc = Exception("Resource exhausted")
         exc.status_code = 429
@@ -93,14 +95,14 @@ class TestRetry:
         assert _retry(fn, max_retries=3, initial_delay=0.01) == "ok"
         assert fn.call_count == 3
 
-    @patch("sentrysearch.embedder.time.sleep")
+    @patch("sentrysearch.gemini_embedder.time.sleep")
     def test_retries_on_503(self, mock_sleep):
         exc = Exception("Service unavailable")
         exc.status_code = 503
         fn = MagicMock(side_effect=[exc, "ok"])
         assert _retry(fn, max_retries=3, initial_delay=0.01) == "ok"
 
-    @patch("sentrysearch.embedder.time.sleep")
+    @patch("sentrysearch.gemini_embedder.time.sleep")
     def test_raises_quota_error_after_max_retries(self, mock_sleep):
         exc = Exception("resource exhausted")
         exc.status_code = 429
@@ -113,7 +115,7 @@ class TestRetry:
         with pytest.raises(ValueError, match="bad input"):
             _retry(fn, max_retries=3, initial_delay=0.01)
 
-    @patch("sentrysearch.embedder.time.sleep")
+    @patch("sentrysearch.gemini_embedder.time.sleep")
     def test_exponential_backoff(self, mock_sleep):
         exc = Exception("503 error")
         exc.status_code = 503
@@ -125,35 +127,67 @@ class TestRetry:
 
 
 # ---------------------------------------------------------------------------
-# embed_query / embed_video_chunk with mocked client
+# Embedder factory
 # ---------------------------------------------------------------------------
 
-class TestEmbedQuery:
-    @patch("sentrysearch.embedder._get_client")
-    def test_returns_vector(self, mock_get_client):
+class TestEmbedderFactory:
+    def test_unknown_backend_raises(self):
+        with pytest.raises(ValueError, match="Unknown backend"):
+            get_embedder("nonexistent")
+
+    @patch("google.genai.Client")
+    def test_embed_query_delegates(self, mock_client_cls):
         fake_values = [0.1] * 768
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.embeddings = [MagicMock(values=fake_values)]
         mock_client.models.embed_content.return_value = mock_response
-        mock_get_client.return_value = mock_client
+        mock_client_cls.return_value = mock_client
 
-        result = embed_query("a red car")
-        assert result == fake_values
-        assert len(result) == 768
-        mock_client.models.embed_content.assert_called_once()
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            result = embed_query("a red car")
+            assert result == fake_values
+            assert len(result) == 768
+            mock_client.models.embed_content.assert_called_once()
 
-
-class TestEmbedVideoChunk:
-    @patch("sentrysearch.embedder._get_client")
-    def test_returns_vector(self, mock_get_client, tiny_video):
+    @patch("google.genai.Client")
+    def test_embed_video_chunk_delegates(self, mock_client_cls, tiny_video):
         fake_values = [0.2] * 768
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.embeddings = [MagicMock(values=fake_values)]
         mock_client.models.embed_content.return_value = mock_response
-        mock_get_client.return_value = mock_client
+        mock_client_cls.return_value = mock_client
 
-        result = embed_video_chunk(tiny_video)
-        assert result == fake_values
-        assert len(result) == 768
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            result = embed_video_chunk(tiny_video)
+            assert result == fake_values
+            assert len(result) == 768
+
+    @patch("google.genai.Client")
+    def test_get_embedder_caches_instance(self, mock_client_cls):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            e1 = get_embedder("gemini")
+            e2 = get_embedder("gemini")
+            assert e1 is e2
+
+    @patch("google.genai.Client")
+    def test_reset_clears_cache(self, mock_client_cls):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            e1 = get_embedder("gemini")
+            reset_embedder()
+            e2 = get_embedder("gemini")
+            assert e1 is not e2
+
+    def test_get_embedder_local_backend(self):
+        with patch("sentrysearch.local_embedder.LocalEmbedder") as MockLocal:
+            mock_instance = MagicMock()
+            MockLocal.return_value = mock_instance
+            reset_embedder()
+            result = get_embedder("local", model="test-model", dimensions=512)
+            MockLocal.assert_called_once_with(model_name="test-model", dimensions=512)
+            assert result is mock_instance
