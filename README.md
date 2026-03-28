@@ -2,7 +2,7 @@
 
 Semantic search over video footage. Type what you're looking for, get a trimmed clip back.
 
-[ClawHub Skill](https://clawhub.ai/ssrajadh/natural-language-video-search)
+[OpenClaw Skill](https://clawhub.ai/ssrajadh/natural-language-video-search)
 
 [<video src="https://github.com/ssrajadh/sentrysearch/raw/main/docs/demo.mp4" controls width="100%"></video>](https://github.com/user-attachments/assets/baf98fad-080b-48e1-97f5-a2db2cbd53f5)
 
@@ -104,6 +104,37 @@ With `--no-trim`, low-confidence results are shown with a note instead of a prom
 
 Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff.
 
+### Local Backend (no API key needed)
+
+Index and search using a local Qwen3-VL-Embedding model instead of the Gemini API. Free, private, and runs entirely on your machine.
+
+The default model is **Qwen3-VL-Embedding-8B**. Pick an install based on your hardware:
+
+| Hardware | Install command | What happens |
+|---|---|---|
+| **Apple Silicon, 32 GB+** (M1/M2/M3/M4/M5 Pro/Max) | `uv sync --extra local` | Full float16 precision via MPS (~16 GB unified memory) |
+| **NVIDIA, 18 GB+ VRAM** (A100, RTX 3090/4090) | `uv sync --extra local` | Full bf16 precision (~18 GB VRAM) |
+| **NVIDIA, 8–16 GB VRAM** (most consumer GPUs) | `uv sync --extra local-quantized` | 4-bit quantization via bitsandbytes (~6–8 GB VRAM) |
+
+> **Not sure?** On Mac, use `--extra local`. On NVIDIA, use `--extra local-quantized` — 4-bit quantization works on the widest range of NVIDIA hardware with minimal quality loss. (bitsandbytes requires CUDA and does not work on Mac/MPS.)
+
+Index and search with `--backend local`:
+
+```bash
+sentrysearch index /path/to/footage --backend local
+sentrysearch search "car running a red light" --backend local
+```
+
+Options:
+- `--model qwen2b` — smaller model, lower quality but only ~4 GB VRAM (also accepts full HuggingFace IDs)
+- `--quantize` / `--no-quantize` — force 4-bit quantization on or off (default: auto-detect based on whether bitsandbytes is installed)
+
+Notes:
+- First run downloads the model (~16 GB for 8B, ~4 GB for 2B).
+- Requires a GPU for reasonable speed (CUDA or Apple Metal). CPU works but is very slow.
+- Embeddings from Gemini and local backends are **not compatible** — an index built with one backend cannot be searched with the other. Re-index if you switch backends.
+- Switching models (e.g. 8B → 2B) also produces incompatible embeddings — re-index if you change models.
+
 ### Tesla Metadata Overlay
 
 Burn speed, location, and time onto trimmed clips:
@@ -135,31 +166,6 @@ uv sync --extra tesla
 Without geopy, the overlay still works but omits the city/road name.
 
 Source: [teslamotors/dashcam](https://github.com/teslamotors/dashcam)
-
-### Local Backend (no API key needed)
-
-Index and search using a local Qwen3-VL-Embedding model instead of the Gemini API. Free, private, and runs entirely on your machine.
-
-Install dependencies:
-
-```bash
-uv sync --extra local
-# For 4-bit quantization (lower VRAM usage):
-uv sync --extra local-quantized
-```
-
-Index and search with `--backend local`:
-
-```bash
-sentrysearch index /path/to/footage --backend local
-sentrysearch search "car running a red light" --backend local
-```
-
-Notes:
-- First run downloads the model (~4GB for 2B, ~16GB for 8B)
-- Requires a GPU for reasonable speed (CUDA or Apple Metal). CPU works but is very slow.
-- For better quality, use the 8B model: `--model Qwen/Qwen3-VL-Embedding-8B` (requires ~18GB VRAM)
-- Embeddings from Gemini and local backends are **not compatible** — an index built with one backend cannot be searched with the other. Re-index if you switch backends.
 
 ### Stats
 

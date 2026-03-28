@@ -215,8 +215,8 @@ def init():
               help="Skip chunks with no meaningful visual change.")
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default="gemini",
               show_default=True, help="Embedding backend to use.")
-@click.option("--model", default="Qwen/Qwen3-VL-Embedding-8B", show_default=True,
-              help="HuggingFace model ID for local backend.")
+@click.option("--model", default="qwen8b", show_default=True,
+              help="Model for local backend: qwen8b, qwen2b, or a HuggingFace model ID.")
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
@@ -358,8 +358,8 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
               help="Burn Tesla telemetry overlay (speed, GPS, turn signals) onto trimmed clip.")
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
               help="Embedding backend (auto-detected from index if omitted).")
-@click.option("--model", default="Qwen/Qwen3-VL-Embedding-8B", show_default=True,
-              help="HuggingFace model ID for local backend.")
+@click.option("--model", default="qwen8b", show_default=True,
+              help="Model for local backend: qwen8b, qwen2b, or a HuggingFace model ID.")
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
