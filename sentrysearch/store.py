@@ -179,6 +179,14 @@ class SentryStore:
         )
         return len(results["ids"]) > 0
 
+    def remove_file(self, source_file: str) -> int:
+        """Remove all chunks for a given source file. Returns count removed."""
+        results = self._collection.get(where={"source_file": source_file})
+        ids = results["ids"]
+        if ids:
+            self._collection.delete(ids=ids)
+        return len(ids)
+
     def get_stats(self) -> dict:
         """Return store statistics."""
         total = self._collection.count()

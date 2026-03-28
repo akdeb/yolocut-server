@@ -38,7 +38,7 @@ This prompts for your Gemini API key, writes it to `.env`, and validates it with
 4. Index your footage:
 
 ```bash
-sentrysearch index /path/to/dashcam/footage
+sentrysearch index /path/to/footage
 ```
 
 5. Search:
@@ -82,6 +82,7 @@ Options:
 - `--target-resolution 480` — target height in pixels for preprocessing
 - `--target-fps 5` — target frame rate for preprocessing
 - `--no-skip-still` — embed all chunks, even ones with no visual change
+- `--backend local` — use a local model instead of Gemini ([details below](#local-backend-no-api-key-needed))
 
 ### Search
 
@@ -112,7 +113,7 @@ The default model is **Qwen3-VL-Embedding-8B**. Pick an install based on your ha
 
 | Hardware | Install command | What happens |
 |---|---|---|
-| **Apple Silicon, 32 GB+** (M1/M2/M3/M4/M5 Pro/Max) | `uv sync --extra local` | Full float16 precision via MPS (~16 GB unified memory) |
+| **Apple Silicon, 32 GB+ RAM** (M1/M2/M3/M4/M5 Pro/Max) | `uv sync --extra local` | Full float16 precision via MPS (~16 GB unified memory) |
 | **NVIDIA, 18 GB+ VRAM** (A100, RTX 3090/4090) | `uv sync --extra local` | Full bf16 precision (~18 GB VRAM) |
 | **NVIDIA, 8–16 GB VRAM** (most consumer GPUs) | `uv sync --extra local-quantized` | 4-bit quantization via bitsandbytes (~6–8 GB VRAM) |
 
@@ -167,13 +168,17 @@ Without geopy, the overlay still works but omits the city/road name.
 
 Source: [teslamotors/dashcam](https://github.com/teslamotors/dashcam)
 
-### Stats
+### Managing the index
 
 ```bash
-$ sentrysearch stats
-Total chunks:  47
-Source files:  12
-Backend:       gemini
+# Show index info (files marked [missing] no longer exist on disk)
+sentrysearch stats
+
+# Remove specific files by path substring
+sentrysearch remove path/to/footage
+
+# Wipe the entire index
+sentrysearch reset
 ```
 
 ### Verbose mode

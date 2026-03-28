@@ -104,6 +104,28 @@ class TestSentryStore:
         assert tmp_store.is_indexed("found.mp4")
         assert not tmp_store.is_indexed("other.mp4")
 
+    def test_remove_file(self, tmp_store):
+        emb = _make_embedding()
+        tmp_store.add_chunk("a1", emb, {
+            "source_file": "keep.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+        tmp_store.add_chunk("b1", emb, {
+            "source_file": "drop.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+        tmp_store.add_chunk("b2", emb, {
+            "source_file": "drop.mp4", "start_time": 30.0, "end_time": 60.0,
+        })
+        assert tmp_store.get_stats()["total_chunks"] == 3
+        removed = tmp_store.remove_file("drop.mp4")
+        assert removed == 2
+        assert tmp_store.get_stats()["total_chunks"] == 1
+        assert tmp_store.is_indexed("keep.mp4")
+        assert not tmp_store.is_indexed("drop.mp4")
+
+    def test_remove_file_nonexistent(self, tmp_store):
+        removed = tmp_store.remove_file("nope.mp4")
+        assert removed == 0
+
     def test_self_similarity_near_one(self, tmp_store):
         emb = _make_embedding(seed=42.0)
         tmp_store.add_chunk("self", emb, {

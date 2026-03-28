@@ -513,4 +513,75 @@ def stats():
     click.echo(f"Backend:       {store.get_backend()}")
     click.echo("\nIndexed files:")
     for f in s["source_files"]:
-        click.echo(f"  {f}")
+        exists = os.path.exists(f)
+        label = "" if exists else "  [missing]"
+        click.echo(f"  {f}{label}")
+
+
+# -----------------------------------------------------------------------
+# reset
+# -----------------------------------------------------------------------
+
+@cli.command()
+@click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
+              help="Backend to reset (auto-detected if omitted).")
+@click.confirmation_option(prompt="This will delete all indexed data. Continue?")
+def reset(backend):
+    """Delete all indexed data."""
+    from .store import SentryStore, detect_backend
+
+    if backend is None:
+        backend = detect_backend() or "gemini"
+
+    store = SentryStore(backend=backend)
+    s = store.get_stats()
+
+    if s["total_chunks"] == 0:
+        click.echo("Index is already empty.")
+        return
+
+    for f in s["source_files"]:
+        store.remove_file(f)
+
+    click.echo(f"Removed {s['total_chunks']} chunks from {s['unique_source_files']} files.")
+
+
+# -----------------------------------------------------------------------
+# remove
+# -----------------------------------------------------------------------
+
+@cli.command()
+@click.argument("files", nargs=-1, required=True)
+@click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
+              help="Backend to remove from (auto-detected if omitted).")
+def remove(files, backend):
+    """Remove specific files from the index.
+
+    Accepts full paths or substrings that match indexed file paths.
+    """
+    from .store import SentryStore, detect_backend
+
+    if backend is None:
+        backend = detect_backend() or "gemini"
+
+    store = SentryStore(backend=backend)
+    s = store.get_stats()
+
+    if s["total_chunks"] == 0:
+        click.echo("Index is empty.")
+        return
+
+    total_removed = 0
+    for pattern in files:
+        # Match against indexed source files (substring match)
+        matches = [f for f in s["source_files"] if pattern in f]
+        if not matches:
+            click.echo(f"No indexed files matching '{pattern}'")
+            continue
+        for source_file in matches:
+            removed = store.remove_file(source_file)
+            click.echo(f"Removed {removed} chunks from {source_file}")
+            total_removed += removed
+
+    if total_removed:
+        click.echo(f"\nTotal: removed {total_removed} chunks.")
