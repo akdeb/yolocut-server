@@ -191,3 +191,31 @@ class TestEmbedderFactory:
             result = get_embedder("local", model="test-model", dimensions=512)
             MockLocal.assert_called_once_with(model_name="test-model", dimensions=512, quantize=None)
             assert result is mock_instance
+
+    def test_get_embedder_local_defaults(self):
+        with patch("sentrysearch.local_embedder.LocalEmbedder") as MockLocal:
+            MockLocal.return_value = MagicMock()
+            reset_embedder()
+            get_embedder("local")
+            MockLocal.assert_called_once_with(model_name="qwen8b", dimensions=768, quantize=None)
+
+    def test_get_embedder_local_with_quantize(self):
+        with patch("sentrysearch.local_embedder.LocalEmbedder") as MockLocal:
+            MockLocal.return_value = MagicMock()
+            reset_embedder()
+            get_embedder("local", quantize=True)
+            MockLocal.assert_called_once_with(model_name="qwen8b", dimensions=768, quantize=True)
+
+    def test_get_embedder_local_with_quantize_false(self):
+        with patch("sentrysearch.local_embedder.LocalEmbedder") as MockLocal:
+            MockLocal.return_value = MagicMock()
+            reset_embedder()
+            get_embedder("local", quantize=False)
+            MockLocal.assert_called_once_with(model_name="qwen8b", dimensions=768, quantize=False)
+
+    def test_get_embedder_local_with_model_alias(self):
+        with patch("sentrysearch.local_embedder.LocalEmbedder") as MockLocal:
+            MockLocal.return_value = MagicMock()
+            reset_embedder()
+            get_embedder("local", model="qwen2b")
+            MockLocal.assert_called_once_with(model_name="qwen2b", dimensions=768, quantize=None)

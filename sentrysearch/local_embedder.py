@@ -16,16 +16,23 @@ class LocalModelError(RuntimeError):
     """Raised when the local model fails to load or run."""
 
 
+# Short aliases → full HuggingFace model IDs
+MODEL_ALIASES: dict[str, str] = {
+    "qwen8b": "Qwen/Qwen3-VL-Embedding-8B",
+    "qwen2b": "Qwen/Qwen3-VL-Embedding-2B",
+}
+
+
 class LocalEmbedder(BaseEmbedder):
     """Qwen3-VL-Embedding backend (local GPU inference)."""
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-VL-Embedding-8B",
+        model_name: str = "qwen8b",
         dimensions: int = 768,
         quantize: bool | None = None,
     ):
-        self._model_name = model_name
+        self._model_name = MODEL_ALIASES.get(model_name, model_name)
         self._dimensions = dimensions
         self._quantize = quantize  # None = auto-detect
         self._model = None

@@ -86,6 +86,101 @@ class TestIndexCommand:
             assert result.exit_code == 0
 
 
+class TestIndexLocalFlags:
+    def test_index_passes_model_to_embedder(self, runner, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get:
+            MockStore.return_value = MagicMock()
+            result = runner.invoke(cli, [
+                "index", str(empty_dir), "--backend", "local", "--model", "qwen2b",
+            ])
+            assert result.exit_code == 0
+            mock_get.assert_called_once()
+            assert mock_get.call_args[1]["model"] == "qwen2b"
+
+    def test_index_passes_quantize_to_embedder(self, runner, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get:
+            MockStore.return_value = MagicMock()
+            result = runner.invoke(cli, [
+                "index", str(empty_dir), "--backend", "local", "--quantize",
+            ])
+            assert result.exit_code == 0
+            mock_get.assert_called_once()
+            assert mock_get.call_args[1]["quantize"] is True
+
+    def test_index_passes_no_quantize_to_embedder(self, runner, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get:
+            MockStore.return_value = MagicMock()
+            result = runner.invoke(cli, [
+                "index", str(empty_dir), "--backend", "local", "--no-quantize",
+            ])
+            assert result.exit_code == 0
+            mock_get.assert_called_once()
+            assert mock_get.call_args[1]["quantize"] is False
+
+    def test_index_default_model_is_qwen8b(self, runner, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get:
+            MockStore.return_value = MagicMock()
+            result = runner.invoke(cli, [
+                "index", str(empty_dir), "--backend", "local",
+            ])
+            assert result.exit_code == 0
+            assert mock_get.call_args[1]["model"] == "qwen8b"
+
+    def test_index_passes_backend_to_store(self, runner, tmp_path):
+        d = tmp_path / "vids"
+        d.mkdir()
+        (d / "test.mp4").write_bytes(b"fake")
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()):
+            mock_inst = MagicMock()
+            mock_inst.is_indexed.return_value = True
+            MockStore.return_value = mock_inst
+            runner.invoke(cli, ["index", str(d), "--backend", "local"])
+            MockStore.assert_called_once_with(backend="local")
+
+
+class TestSearchLocalFlags:
+    def test_search_passes_model_to_embedder(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
+             patch("sentrysearch.store.detect_backend", return_value="local"), \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, [
+                "search", "test query", "--backend", "local", "--model", "qwen2b",
+            ])
+            assert result.exit_code == 0
+            mock_get.assert_called_with("local", model="qwen2b", quantize=None)
+
+    def test_search_passes_quantize_to_embedder(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
+             patch("sentrysearch.store.detect_backend", return_value="local"), \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, [
+                "search", "test query", "--backend", "local", "--quantize",
+            ])
+            assert result.exit_code == 0
+            mock_get.assert_called_with("local", model="qwen8b", quantize=True)
+
+
 class TestHandleError:
     def test_local_model_error(self, runner):
         from sentrysearch.local_embedder import LocalModelError
