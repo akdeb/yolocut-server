@@ -38,7 +38,7 @@ This prompts for your Gemini API key, writes it to `.env`, and validates it with
 4. Index your footage:
 
 ```bash
-sentrysearch index /path/to/dashcam/footage
+sentrysearch index /path/to/footage
 ```
 
 5. Search:
@@ -82,6 +82,7 @@ Options:
 - `--target-resolution 480` — target height in pixels for preprocessing
 - `--target-fps 5` — target frame rate for preprocessing
 - `--no-skip-still` — embed all chunks, even ones with no visual change
+- `--backend local` — use a local model instead of Gemini ([details below](#local-backend-no-api-key-needed))
 
 ### Search
 
@@ -110,11 +111,14 @@ Index and search using a local Qwen3-VL-Embedding model instead of the Gemini AP
 
 The default model is **Qwen3-VL-Embedding-8B**. Pick an install based on your hardware:
 
-| Hardware | Install command | What happens |
-|---|---|---|
-| **Apple Silicon, 32 GB+** (M1/M2/M3/M4/M5 Pro/Max) | `uv sync --extra local` | Full float16 precision via MPS (~16 GB unified memory) |
-| **NVIDIA, 18 GB+ VRAM** (A100, RTX 3090/4090) | `uv sync --extra local` | Full bf16 precision (~18 GB VRAM) |
-| **NVIDIA, 8–16 GB VRAM** (most consumer GPUs) | `uv sync --extra local-quantized` | 4-bit quantization via bitsandbytes (~6–8 GB VRAM) |
+| Hardware | Install command | Model | Notes |
+|---|---|---|---|
+| **Apple Silicon, 24 GB+ RAM** | `uv sync --extra local` | 8B (default) | Full float16 via MPS |
+| **Apple Silicon, 16 GB RAM** | `uv sync --extra local` | `--model qwen2b` | 8B won't fit; 2B uses ~6 GB |
+| **NVIDIA, 18 GB+ VRAM** | `uv sync --extra local` | 8B (default) | Full bf16 precision |
+| **NVIDIA, 8–16 GB VRAM** | `uv sync --extra local-quantized` | 8B (default) | 4-bit quantization (~6–8 GB) |
+
+> **Won't work well:** Intel Macs, machines without a dedicated GPU, and Apple Silicon with 8 GB RAM. These fall back to CPU with float32 — too slow and memory-hungry for practical use. Use the **Gemini API backend** (the default) instead.
 
 > **Not sure?** On Mac, use `--extra local`. On NVIDIA, use `--extra local-quantized` — 4-bit quantization works on the widest range of NVIDIA hardware with minimal quality loss. (bitsandbytes requires CUDA and does not work on Mac/MPS.)
 
@@ -126,12 +130,11 @@ sentrysearch search "car running a red light" --backend local
 ```
 
 Options:
-- `--model qwen2b` — smaller model, lower quality but only ~4 GB VRAM (also accepts full HuggingFace IDs)
+- `--model qwen2b` — smaller model, lower quality but only ~6 GB memory (also accepts full HuggingFace IDs)
 - `--quantize` / `--no-quantize` — force 4-bit quantization on or off (default: auto-detect based on whether bitsandbytes is installed)
 
 Notes:
 - First run downloads the model (~16 GB for 8B, ~4 GB for 2B).
-- Requires a GPU for reasonable speed (CUDA or Apple Metal). CPU works but is very slow.
 - Embeddings from Gemini and local backends are **not compatible** — an index built with one backend cannot be searched with the other. Re-index if you switch backends.
 - Switching models (e.g. 8B → 2B) also produces incompatible embeddings — re-index if you change models.
 
@@ -167,13 +170,17 @@ Without geopy, the overlay still works but omits the city/road name.
 
 Source: [teslamotors/dashcam](https://github.com/teslamotors/dashcam)
 
-### Stats
+### Managing the index
 
 ```bash
-$ sentrysearch stats
-Total chunks:  47
-Source files:  12
-Backend:       gemini
+# Show index info (files marked [missing] no longer exist on disk)
+sentrysearch stats
+
+# Remove specific files by path substring
+sentrysearch remove path/to/footage
+
+# Wipe the entire index
+sentrysearch reset
 ```
 
 ### Verbose mode
