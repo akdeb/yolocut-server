@@ -103,21 +103,21 @@ No confident match found (best score: 0.28). Show results anyway? [y/N]:
 
 With `--no-trim`, low-confidence results are shown with a note instead of a prompt.
 
-Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff.
+Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff. Backend and model are auto-detected from the index — pass `--backend` or `--model` only to override.
 
 ### Local Backend (no API key needed)
 
 Index and search using a local Qwen3-VL-Embedding model instead of the Gemini API. Free, private, and runs entirely on your machine.
 
-The default model is **Qwen3-VL-Embedding-8B**. Pick an install based on your hardware:
+The model is **auto-detected from your hardware** — qwen8b for NVIDIA GPUs and Macs with 24 GB+ RAM, qwen2b for smaller Macs and CPU-only systems. You can override with `--model qwen2b` or `--model qwen8b`. Pick an install based on your hardware:
 
-| Hardware | Install command | Model | Notes |
+| Hardware | Install command | Auto-detected model | Notes |
 |---|---|---|---|
-| **Apple Silicon, 24 GB+ RAM** | `uv tool install ".[local]"` | 8B (default) | Full float16 via MPS |
-| **Apple Silicon, 16 GB RAM** | `uv tool install ".[local]"` | `--model qwen2b` | 8B won't fit; 2B uses ~6 GB |
-| **Apple Silicon, 8 GB RAM** | `uv tool install ".[local]"` | `--model qwen2b` | Tight — may swap under load; Gemini API recommended instead |
-| **NVIDIA, 18 GB+ VRAM** | `uv tool install ".[local]"` | 8B (default) | Full bf16 precision |
-| **NVIDIA, 8–16 GB VRAM** | `uv tool install ".[local-quantized]"` | 8B (default) | 4-bit quantization (~6–8 GB) |
+| **Apple Silicon, 24 GB+ RAM** | `uv tool install ".[local]"` | qwen8b | Full float16 via MPS |
+| **Apple Silicon, 16 GB RAM** | `uv tool install ".[local]"` | qwen2b | 8B won't fit; 2B uses ~6 GB |
+| **Apple Silicon, 8 GB RAM** | `uv tool install ".[local]"` | qwen2b | Tight — may swap under load; Gemini API recommended instead |
+| **NVIDIA, 18 GB+ VRAM** | `uv tool install ".[local]"` | qwen8b | Full bf16 precision |
+| **NVIDIA, 8–16 GB VRAM** | `uv tool install ".[local-quantized]"` | qwen8b | 4-bit quantization (~6–8 GB) |
 
 > **Won't work well:** Intel Macs and machines without a dedicated GPU. These fall back to CPU with float32 — too slow and memory-hungry for practical use. Use the **Gemini API backend** (the default) instead.
 
@@ -129,11 +129,18 @@ The default model is **Qwen3-VL-Embedding-8B**. Pick an install based on your ha
 brew install ffmpeg
 ```
 
-Index and search with `--backend local`:
+Index with `--backend local` and search — no extra flags needed:
 
 ```bash
 sentrysearch index /path/to/footage --backend local
-sentrysearch search "car running a red light" --backend local
+sentrysearch search "car running a red light"
+```
+
+The search command auto-detects the backend and model from whatever you indexed with. You can also use `--model` as a shorthand — it implies `--backend local`:
+
+```bash
+sentrysearch index /path/to/footage --model qwen2b   # same as --backend local --model qwen2b
+sentrysearch search "car running a red light"          # auto-detects local/qwen2b from index
 ```
 
 Options:
@@ -142,8 +149,7 @@ Options:
 
 Notes:
 - First run downloads the model (~16 GB for 8B, ~4 GB for 2B).
-- Embeddings from Gemini and local backends are **not compatible** — an index built with one backend cannot be searched with the other. Re-index if you switch backends.
-- Switching models (e.g. 8B → 2B) also produces incompatible embeddings — re-index if you change models.
+- Embeddings from different backends and models are **not compatible**. Each backend/model combination gets its own isolated index, so they can't accidentally mix. If you search with a model that has no indexed data, you'll be told which model was actually used.
 - Speed varies by GPU core count — base M-series chips are slower than Pro/Max but produce identical results.
 
 ### Tesla Metadata Overlay

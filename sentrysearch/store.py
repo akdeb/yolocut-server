@@ -9,37 +9,65 @@ import chromadb
 
 DEFAULT_DB_PATH = Path.home() / ".sentrysearch" / "db"
 
-# Backend → collection name mapping
-_COLLECTION_NAMES = {
-    "gemini": "dashcam_chunks",
-    "local": "dashcam_chunks_local",
-}
-
 
 class BackendMismatchError(RuntimeError):
-    """Raised when search backend doesn't match the indexed backend."""
+    """Raised when search backend/model doesn't match the indexed backend/model."""
 
 
-def detect_backend(db_path: str | Path | None = None) -> str | None:
-    """Return the backend that has indexed data, or None if empty.
+def _collection_name(backend: str, model: str | None = None) -> str:
+    """Return ChromaDB collection name for a backend and optional model."""
+    if backend == "gemini":
+        return "dashcam_chunks"
+    if model:
+        return f"dashcam_chunks_local_{model}"
+    # Legacy: local backend without model distinction
+    return "dashcam_chunks_local"
 
-    If both backends have data, returns 'gemini' (the default).
+
+def detect_index(db_path: str | Path | None = None) -> tuple[str | None, str | None]:
+    """Return ``(backend, model)`` for the first index with data.
+
+    Returns ``(None, None)`` when no index contains data.
+    Checks gemini first, then model-specific local collections, then the
+    legacy ``dashcam_chunks_local`` collection (treated as qwen8b).
     """
     db_path = str(db_path or DEFAULT_DB_PATH)
     if not Path(db_path).exists():
-        return None
+        return None, None
     client = chromadb.PersistentClient(path=db_path)
     existing = {c.name for c in client.list_collections()}
-    # Check gemini first (default/legacy)
+
+    # Gemini first (default / legacy)
     if "dashcam_chunks" in existing:
         col = client.get_collection("dashcam_chunks")
         if col.count() > 0:
-            return "gemini"
+            return "gemini", None
+
+    # Model-specific local collections (dashcam_chunks_local_<model>)
+    for name in sorted(existing):
+        if name.startswith("dashcam_chunks_local_"):
+            col = client.get_collection(name)
+            if col.count() > 0:
+                meta = col.metadata or {}
+                model = meta.get("embedding_model")
+                if model is None:
+                    model = name.removeprefix("dashcam_chunks_local_")
+                return "local", model
+
+    # Legacy local collection (no model suffix) — treat as qwen8b
     if "dashcam_chunks_local" in existing:
         col = client.get_collection("dashcam_chunks_local")
         if col.count() > 0:
-            return "local"
-    return None
+            meta = col.metadata or {}
+            return "local", meta.get("embedding_model", "qwen8b")
+
+    return None, None
+
+
+def detect_backend(db_path: str | Path | None = None) -> str | None:
+    """Return the backend that has indexed data, or None if empty."""
+    backend, _ = detect_index(db_path)
+    return backend
 
 
 def _make_chunk_id(source_file: str, start_time: float) -> str:
@@ -51,17 +79,21 @@ def _make_chunk_id(source_file: str, start_time: float) -> str:
 class SentryStore:
     """Persistent vector store backed by ChromaDB."""
 
-    def __init__(self, db_path: str | Path | None = None, backend: str = "gemini"):
+    def __init__(self, db_path: str | Path | None = None, backend: str = "gemini",
+                 model: str | None = None):
         db_path = str(db_path or DEFAULT_DB_PATH)
         Path(db_path).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=db_path)
         self._backend = backend
-        # Separate collection per backend so vectors never mix.
-        # Legacy collection "dashcam_chunks" (no suffix) is treated as gemini.
-        collection_name = "dashcam_chunks" if backend == "gemini" else f"dashcam_chunks_{backend}"
+        self._model = model
+        # Separate collection per backend+model so incompatible vectors never mix.
+        col_name = _collection_name(backend, model)
+        metadata = {"hnsw:space": "cosine", "embedding_backend": backend}
+        if model:
+            metadata["embedding_model"] = model
         self._collection = self._client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine", "embedding_backend": backend},
+            name=col_name,
+            metadata=metadata,
         )
 
     @property
@@ -72,6 +104,11 @@ class SentryStore:
         """Return the backend this index was built with."""
         meta = self._collection.metadata or {}
         return meta.get("embedding_backend", "gemini")
+
+    def get_model(self) -> str | None:
+        """Return the model this index was built with, or None."""
+        meta = self._collection.metadata or {}
+        return meta.get("embedding_model")
 
     def check_backend(self, backend: str) -> None:
         """Raise BackendMismatchError if *backend* doesn't match the index."""

@@ -4,7 +4,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sentrysearch.local_embedder import LocalEmbedder, LocalModelError, MODEL_ALIASES
+from sentrysearch.local_embedder import (
+    LocalEmbedder, LocalModelError, MODEL_ALIASES,
+    normalize_model_key, detect_default_model,
+)
 
 
 class TestModelAliases:
@@ -79,6 +82,42 @@ class TestLocalEmbedderLoadModel:
         embedder._model = MagicMock()  # pretend already loaded
         # Should return immediately without reloading
         embedder._load_model()
+
+
+class TestNormalizeModelKey:
+    def test_alias_returned_as_is(self):
+        assert normalize_model_key("qwen8b") == "qwen8b"
+        assert normalize_model_key("qwen2b") == "qwen2b"
+
+    def test_full_hf_id_reversed_to_alias(self):
+        assert normalize_model_key("Qwen/Qwen3-VL-Embedding-8B") == "qwen8b"
+        assert normalize_model_key("Qwen/Qwen3-VL-Embedding-2B") == "qwen2b"
+
+    def test_custom_model_sanitized(self):
+        assert normalize_model_key("org/my-custom-model") == "org_my_custom_model"
+
+
+class TestDetectDefaultModel:
+    def test_no_torch_returns_qwen8b(self):
+        with patch.dict("sys.modules", {"torch": None}):
+            # ImportError path
+            result = detect_default_model()
+            assert result == "qwen8b"
+
+    def test_cuda_returns_qwen8b(self):
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = True
+        with patch.dict("sys.modules", {"torch": mock_torch}):
+            result = detect_default_model()
+            assert result == "qwen8b"
+
+    def test_cpu_only_returns_qwen2b(self):
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = False
+        with patch.dict("sys.modules", {"torch": mock_torch}):
+            result = detect_default_model()
+            assert result == "qwen2b"
 
 
 class TestLocalEmbedderMethods:

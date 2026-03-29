@@ -213,10 +213,11 @@ def init():
               help="Target frames per second for preprocessing.")
 @click.option("--skip-still/--no-skip-still", default=True, show_default=True,
               help="Skip chunks with no meaningful visual change.")
-@click.option("--backend", type=click.Choice(["gemini", "local"]), default="gemini",
-              show_default=True, help="Embedding backend to use.")
-@click.option("--model", default="qwen8b", show_default=True,
-              help="Model for local backend: qwen8b, qwen2b, or a HuggingFace model ID.")
+@click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
+              help="Embedding backend (default: gemini, or local when --model is set).")
+@click.option("--model", default=None, show_default=False,
+              help="Model for local backend: qwen8b, qwen2b, or HuggingFace ID "
+                   "(default: auto-detect from hardware). Implies --backend local.")
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
@@ -225,9 +226,25 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
     """Index mp4 files in DIRECTORY for searching."""
     from .chunker import chunk_video, is_still_frame_chunk, preprocess_chunk, scan_directory
     from .embedder import get_embedder, reset_embedder
+    from .local_embedder import detect_default_model, normalize_model_key
     from .store import SentryStore
 
     try:
+        # --model implies --backend local
+        if model is not None and backend is None:
+            backend = "local"
+        if backend is None:
+            backend = "gemini"
+
+        # Auto-detect model from hardware when using local backend
+        if backend == "local" and model is None:
+            model = detect_default_model()
+            click.echo(f"Auto-detected model: {model}", err=True)
+
+        # Normalize model key for consistent collection naming
+        if backend == "local":
+            model = normalize_model_key(model)
+
         embedder = get_embedder(backend, model=model, quantize=quantize)
 
         if os.path.isfile(directory):
@@ -239,7 +256,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
             click.echo("No mp4 files found.")
             return
 
-        store = SentryStore(backend=backend)
+        store = SentryStore(backend=backend, model=model)
         total_files = len(videos)
         new_files = 0
         new_chunks = 0
@@ -358,31 +375,61 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
               help="Burn Tesla telemetry overlay (speed, GPS, turn signals) onto trimmed clip.")
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
               help="Embedding backend (auto-detected from index if omitted).")
-@click.option("--model", default="qwen8b", show_default=True,
-              help="Model for local backend: qwen8b, qwen2b, or a HuggingFace model ID.")
+@click.option("--model", default=None, show_default=False,
+              help="Model for local backend: qwen8b, qwen2b, or HuggingFace ID "
+                   "(default: auto-detect from index). Implies --backend local.")
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
 def search(query, n_results, output_dir, trim, threshold, overlay, backend, model, quantize, verbose):
     """Search indexed footage with a natural language QUERY."""
     from .embedder import get_embedder, reset_embedder
+    from .local_embedder import normalize_model_key
     from .search import search_footage
-    from .store import SentryStore, detect_backend
+    from .store import SentryStore, detect_index
 
     output_dir = os.path.expanduser(output_dir)
 
     try:
-        # Auto-detect backend from whichever collection has data
-        if backend is None:
-            backend = detect_backend() or "gemini"
+        # --model implies --backend local
+        if model is not None and backend is None:
+            backend = "local"
 
-        store = SentryStore(backend=backend)
+        # Normalize model key for consistent collection naming
+        if model is not None:
+            model = normalize_model_key(model)
+
+        # Auto-detect backend and model from whichever collection has data
+        if backend is None:
+            detected_backend, detected_model = detect_index()
+            backend = detected_backend or "gemini"
+            if model is None:
+                model = detected_model
+        elif backend == "local" and model is None:
+            _, detected_model = detect_index()
+            model = detected_model
+
+        store = SentryStore(backend=backend, model=model)
 
         if store.get_stats()["total_chunks"] == 0:
-            click.echo(
-                "No indexed footage found. "
-                "Run `sentrysearch index <directory>` first."
-            )
+            # Check if data exists under a different model
+            det_backend, det_model = detect_index()
+            if det_backend == backend and det_model and det_model != model:
+                click.echo(
+                    f"No footage indexed with the {model} model. "
+                    f"Your index uses {det_model}.\n\n"
+                    f"Try: sentrysearch search \"{query}\" --model {det_model}"
+                )
+            elif det_backend and det_backend != backend:
+                click.echo(
+                    f"No footage indexed with the {backend} backend. "
+                    f"Your index uses {det_backend}."
+                )
+            else:
+                click.echo(
+                    "No indexed footage found. "
+                    "Run `sentrysearch index <directory>` first."
+                )
             return
 
         get_embedder(backend, model=model, quantize=quantize)
@@ -498,10 +545,12 @@ def overlay(video, output):
 @cli.command()
 def stats():
     """Print index statistics."""
-    from .store import SentryStore, detect_backend
+    from .store import SentryStore, detect_index
 
-    backend = detect_backend() or "gemini"
-    store = SentryStore(backend=backend)
+    backend, model = detect_index()
+    if backend is None:
+        backend = "gemini"
+    store = SentryStore(backend=backend, model=model)
     s = store.get_stats()
 
     if s["total_chunks"] == 0:
@@ -510,7 +559,10 @@ def stats():
 
     click.echo(f"Total chunks:  {s['total_chunks']}")
     click.echo(f"Source files:  {s['unique_source_files']}")
-    click.echo(f"Backend:       {store.get_backend()}")
+    backend_label = store.get_backend()
+    if model:
+        backend_label += f" ({model})"
+    click.echo(f"Backend:       {backend_label}")
     click.echo("\nIndexed files:")
     for f in s["source_files"]:
         exists = os.path.exists(f)
@@ -525,15 +577,22 @@ def stats():
 @cli.command()
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
               help="Backend to reset (auto-detected if omitted).")
+@click.option("--model", default=None,
+              help="Model to reset (auto-detected if omitted). Implies --backend local.")
 @click.confirmation_option(prompt="This will delete all indexed data. Continue?")
-def reset(backend):
+def reset(backend, model):
     """Delete all indexed data."""
-    from .store import SentryStore, detect_backend
+    from .store import SentryStore, detect_index
 
+    if model is not None and backend is None:
+        backend = "local"
     if backend is None:
-        backend = detect_backend() or "gemini"
+        backend, detected_model = detect_index()
+        backend = backend or "gemini"
+        if model is None:
+            model = detected_model
 
-    store = SentryStore(backend=backend)
+    store = SentryStore(backend=backend, model=model)
     s = store.get_stats()
 
     if s["total_chunks"] == 0:
@@ -554,17 +613,24 @@ def reset(backend):
 @click.argument("files", nargs=-1, required=True)
 @click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
               help="Backend to remove from (auto-detected if omitted).")
-def remove(files, backend):
+@click.option("--model", default=None,
+              help="Model to remove from (auto-detected if omitted). Implies --backend local.")
+def remove(files, backend, model):
     """Remove specific files from the index.
 
     Accepts full paths or substrings that match indexed file paths.
     """
-    from .store import SentryStore, detect_backend
+    from .store import SentryStore, detect_index
 
+    if model is not None and backend is None:
+        backend = "local"
     if backend is None:
-        backend = detect_backend() or "gemini"
+        backend, detected_model = detect_index()
+        backend = backend or "gemini"
+        if model is None:
+            model = detected_model
 
-    store = SentryStore(backend=backend)
+    store = SentryStore(backend=backend, model=model)
     s = store.get_stats()
 
     if s["total_chunks"] == 0:

@@ -150,6 +150,12 @@ class TestStoreBackend:
         store = SentryStore(db_path=tmp_path / "db", backend="local")
         assert store.collection.name == "dashcam_chunks_local"
 
+    def test_local_model_collection_name(self, tmp_path):
+        from sentrysearch.store import SentryStore
+
+        store = SentryStore(db_path=tmp_path / "db", backend="local", model="qwen2b")
+        assert store.collection.name == "dashcam_chunks_local_qwen2b"
+
     def test_gemini_backend_collection_name(self, tmp_path):
         from sentrysearch.store import SentryStore
 
@@ -161,7 +167,7 @@ class TestStoreBackend:
 
         db = tmp_path / "db"
         gemini_store = SentryStore(db_path=db, backend="gemini")
-        local_store = SentryStore(db_path=db, backend="local")
+        local_store = SentryStore(db_path=db, backend="local", model="qwen8b")
 
         emb = _make_embedding(seed=1.0)
         gemini_store.add_chunk("g1", emb, {
@@ -170,6 +176,30 @@ class TestStoreBackend:
 
         assert gemini_store.get_stats()["total_chunks"] == 1
         assert local_store.get_stats()["total_chunks"] == 0
+
+    def test_models_use_separate_collections(self, tmp_path):
+        from sentrysearch.store import SentryStore
+
+        db = tmp_path / "db"
+        store_8b = SentryStore(db_path=db, backend="local", model="qwen8b")
+        store_2b = SentryStore(db_path=db, backend="local", model="qwen2b")
+
+        emb = _make_embedding(seed=1.0)
+        store_2b.add_chunk("c1", emb, {
+            "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+
+        assert store_2b.get_stats()["total_chunks"] == 1
+        assert store_8b.get_stats()["total_chunks"] == 0
+
+    def test_get_model(self, tmp_path):
+        from sentrysearch.store import SentryStore
+
+        store = SentryStore(db_path=tmp_path / "db", backend="local", model="qwen2b")
+        assert store.get_model() == "qwen2b"
+
+    def test_get_model_none_for_gemini(self, tmp_store):
+        assert tmp_store.get_model() is None
 
     def test_check_backend_matching(self, tmp_store):
         tmp_store.check_backend("gemini")  # should not raise
@@ -200,7 +230,7 @@ class TestDetectBackend:
     def test_detects_local(self, tmp_path):
         from sentrysearch.store import SentryStore, detect_backend
 
-        store = SentryStore(db_path=tmp_path / "db", backend="local")
+        store = SentryStore(db_path=tmp_path / "db", backend="local", model="qwen8b")
         store.add_chunk("c1", _make_embedding(), {
             "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
         })
@@ -210,3 +240,59 @@ class TestDetectBackend:
         from sentrysearch.store import detect_backend
 
         assert detect_backend(tmp_path / "no_such_dir") is None
+
+
+class TestDetectIndex:
+    def test_empty_db(self, tmp_path):
+        from sentrysearch.store import SentryStore, detect_index
+
+        SentryStore(db_path=tmp_path / "db", backend="gemini")
+        assert detect_index(tmp_path / "db") == (None, None)
+
+    def test_detects_gemini(self, tmp_path):
+        from sentrysearch.store import SentryStore, detect_index
+
+        store = SentryStore(db_path=tmp_path / "db", backend="gemini")
+        store.add_chunk("c1", _make_embedding(), {
+            "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+        assert detect_index(tmp_path / "db") == ("gemini", None)
+
+    def test_detects_local_model(self, tmp_path):
+        from sentrysearch.store import SentryStore, detect_index
+
+        store = SentryStore(db_path=tmp_path / "db", backend="local", model="qwen2b")
+        store.add_chunk("c1", _make_embedding(), {
+            "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+        assert detect_index(tmp_path / "db") == ("local", "qwen2b")
+
+    def test_legacy_local_treated_as_qwen8b(self, tmp_path):
+        from sentrysearch.store import SentryStore, detect_index
+
+        # Legacy collection: no model specified
+        store = SentryStore(db_path=tmp_path / "db", backend="local")
+        store.add_chunk("c1", _make_embedding(), {
+            "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+        assert detect_index(tmp_path / "db") == ("local", "qwen8b")
+
+    def test_nonexistent_path(self, tmp_path):
+        from sentrysearch.store import detect_index
+
+        assert detect_index(tmp_path / "no_such_dir") == (None, None)
+
+    def test_gemini_preferred_over_local(self, tmp_path):
+        from sentrysearch.store import SentryStore, detect_index
+
+        db = tmp_path / "db"
+        emb = _make_embedding()
+        gemini = SentryStore(db_path=db, backend="gemini")
+        gemini.add_chunk("g1", emb, {
+            "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+        local = SentryStore(db_path=db, backend="local", model="qwen2b")
+        local.add_chunk("l1", emb, {
+            "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
+        })
+        assert detect_index(db) == ("gemini", None)
