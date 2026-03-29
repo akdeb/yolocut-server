@@ -27,7 +27,7 @@ cd sentrysearch
 uv tool install .
 ```
 
-3. Set up your API key:
+3. Set up your API key (or [use a local model instead](#local-backend-no-api-key-needed)):
 
 ```bash
 sentrysearch init
@@ -107,7 +107,7 @@ Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `
 
 ### Local Backend (no API key needed)
 
-Index and search using a local Qwen3-VL-Embedding model instead of the Gemini API. Free, private, and runs entirely on your machine.
+Index and search using a local Qwen3-VL-Embedding model instead of the Gemini API. Free, private, and runs entirely on your machine. For the best search quality, use the Gemini backend — the local 8B model is a solid alternative when you need offline/private search, and the 2B model is a fallback when hardware can't support 8B.
 
 The model is **auto-detected from your hardware** — qwen8b for NVIDIA GPUs and Macs with 24 GB+ RAM, qwen2b for smaller Macs and CPU-only systems. You can override with `--model qwen2b` or `--model qwen8b`. Pick an install based on your hardware:
 

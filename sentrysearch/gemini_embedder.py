@@ -106,7 +106,9 @@ class GeminiEmbedder(BaseEmbedder):
                 "Get a free key at https://aistudio.google.com/apikey\n"
                 "Then either:\n"
                 "  1. Add it to .env:  echo 'GEMINI_API_KEY=your-key' > .env\n"
-                "  2. Export it:       export GEMINI_API_KEY=your-key"
+                "  2. Export it:       export GEMINI_API_KEY=your-key\n\n"
+                "Or use a local model instead (no API key needed):\n"
+                "  sentrysearch index <directory> --backend local"
             )
         self._client = genai.Client(api_key=api_key)
         self._limiter = _RateLimiter()
