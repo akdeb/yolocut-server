@@ -101,7 +101,7 @@ def _apply_overlay_to_clip(
         if location is None:
             click.secho(
                 "Geocoding failed — continuing without location. "
-                "Install deps with: uv sync --extra tesla",
+                "Install deps with: uv tool install \".[tesla]\"",
                 fg="yellow", err=True,
             )
 
