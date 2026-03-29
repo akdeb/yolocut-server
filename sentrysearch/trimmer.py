@@ -157,3 +157,33 @@ def trim_top_result(results: list[dict], output_dir: str) -> str:
         end_time=top["end_time"],
         output_path=output_path,
     )
+
+
+def trim_top_results(results: list[dict], output_dir: str, count: int = 3) -> list[str]:
+    """Trim the top *count* search results and save them to *output_dir*.
+
+    Args:
+        results: List of result dicts from :func:`search_footage`
+                 (must contain source_file, start_time, end_time).
+        output_dir: Directory to write clips into.
+        count: Number of top results to trim.
+
+    Returns:
+        List of paths to saved clips.
+    """
+    if not results:
+        raise ValueError("No results to trim.")
+
+    paths = []
+    for r in results[:count]:
+        filename = _safe_filename(r["source_file"], r["start_time"], r["end_time"])
+        output_path = os.path.join(output_dir, filename)
+        clip = trim_clip(
+            source_file=r["source_file"],
+            start_time=r["start_time"],
+            end_time=r["end_time"],
+            output_path=output_path,
+        )
+        paths.append(clip)
+
+    return paths
