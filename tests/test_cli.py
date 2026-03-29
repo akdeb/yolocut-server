@@ -30,7 +30,8 @@ class TestCliGroup:
 
 class TestStatsCommand:
     def test_stats_empty(self, runner):
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=(None, None)):
             inst = MagicMock()
             inst.get_stats.return_value = {
                 "total_chunks": 0, "unique_source_files": 0, "source_files": [],
@@ -41,22 +42,26 @@ class TestStatsCommand:
             assert "empty" in result.output.lower() or "0" in result.output
 
     def test_stats_with_data(self, runner):
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=("local", "qwen2b")):
             inst = MagicMock()
             inst.get_stats.return_value = {
                 "total_chunks": 10,
                 "unique_source_files": 2,
                 "source_files": ["/a/video1.mp4", "/b/video2.mp4"],
             }
+            inst.get_backend.return_value = "local"
             MockStore.return_value = inst
             result = runner.invoke(cli, ["stats"])
             assert result.exit_code == 0
             assert "10" in result.output
+            assert "qwen2b" in result.output
 
 
 class TestSearchCommand:
     def test_search_empty_index(self, runner):
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=(None, None)):
             inst = MagicMock()
             inst.get_stats.return_value = {"total_chunks": 0}
             MockStore.return_value = inst
@@ -126,36 +131,50 @@ class TestIndexLocalFlags:
             mock_get.assert_called_once()
             assert mock_get.call_args[1]["quantize"] is False
 
-    def test_index_default_model_is_qwen8b(self, runner, tmp_path):
+    def test_index_auto_detects_model(self, runner, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
+             patch("sentrysearch.local_embedder.detect_default_model", return_value="qwen2b"):
+            MockStore.return_value = MagicMock()
+            result = runner.invoke(cli, [
+                "index", str(empty_dir), "--backend", "local",
+            ])
+            assert result.exit_code == 0
+            assert mock_get.call_args[1]["model"] == "qwen2b"
+
+    def test_index_model_implies_local_backend(self, runner, tmp_path):
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
         with patch("sentrysearch.store.SentryStore") as MockStore, \
              patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get:
             MockStore.return_value = MagicMock()
             result = runner.invoke(cli, [
-                "index", str(empty_dir), "--backend", "local",
+                "index", str(empty_dir), "--model", "qwen2b",
             ])
             assert result.exit_code == 0
-            assert mock_get.call_args[1]["model"] == "qwen8b"
+            # Should have inferred backend="local" from --model
+            mock_get.assert_called_once_with("local", model="qwen2b", quantize=None)
 
-    def test_index_passes_backend_to_store(self, runner, tmp_path):
+    def test_index_passes_backend_and_model_to_store(self, runner, tmp_path):
         d = tmp_path / "vids"
         d.mkdir()
         (d / "test.mp4").write_bytes(b"fake")
         with patch("sentrysearch.store.SentryStore") as MockStore, \
-             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()):
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.local_embedder.detect_default_model", return_value="qwen8b"):
             mock_inst = MagicMock()
             mock_inst.is_indexed.return_value = True
             MockStore.return_value = mock_inst
             runner.invoke(cli, ["index", str(d), "--backend", "local"])
-            MockStore.assert_called_once_with(backend="local")
+            MockStore.assert_called_once_with(backend="local", model="qwen8b")
 
 
 class TestSearchLocalFlags:
     def test_search_passes_model_to_embedder(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
              patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
-             patch("sentrysearch.store.detect_backend", return_value="local"), \
              patch("sentrysearch.search.search_footage", return_value=[]):
             inst = MagicMock()
             inst.get_stats.return_value = {"total_chunks": 5}
@@ -169,7 +188,7 @@ class TestSearchLocalFlags:
     def test_search_passes_quantize_to_embedder(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
              patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
-             patch("sentrysearch.store.detect_backend", return_value="local"), \
+             patch("sentrysearch.store.detect_index", return_value=("local", "qwen8b")), \
              patch("sentrysearch.search.search_footage", return_value=[]):
             inst = MagicMock()
             inst.get_stats.return_value = {"total_chunks": 5}
@@ -180,12 +199,54 @@ class TestSearchLocalFlags:
             assert result.exit_code == 0
             mock_get.assert_called_with("local", model="qwen8b", quantize=True)
 
+    def test_search_model_implies_local_backend(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, [
+                "search", "test query", "--model", "qwen2b",
+            ])
+            assert result.exit_code == 0
+            # --model qwen2b should imply --backend local
+            mock_get.assert_called_with("local", model="qwen2b", quantize=None)
+
+    def test_search_auto_detects_backend_and_model(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
+             patch("sentrysearch.store.detect_index", return_value=("local", "qwen2b")), \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            # No --backend or --model flags
+            result = runner.invoke(cli, ["search", "test query"])
+            assert result.exit_code == 0
+            mock_get.assert_called_with("local", model="qwen2b", quantize=None)
+            MockStore.assert_called_once_with(backend="local", model="qwen2b")
+
+    def test_search_wrong_model_shows_suggestion(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=("local", "qwen2b")):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 0}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, [
+                "search", "red car", "--model", "qwen8b",
+            ])
+            assert result.exit_code == 0
+            assert "qwen2b" in result.output
+            assert "qwen8b" in result.output
+
 
 class TestHandleError:
     def test_local_model_error(self, runner):
         from sentrysearch.local_embedder import LocalModelError
 
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=("local", "qwen8b")):
             inst = MagicMock()
             inst.get_stats.return_value = {"total_chunks": 5}
             MockStore.return_value = inst
@@ -201,7 +262,8 @@ class TestHandleError:
     def test_backend_mismatch_error(self, runner):
         from sentrysearch.store import BackendMismatchError
 
-        with patch("sentrysearch.store.SentryStore") as MockStore:
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=("local", "qwen8b")):
             inst = MagicMock()
             inst.get_stats.return_value = {"total_chunks": 5}
             MockStore.return_value = inst
@@ -218,7 +280,7 @@ class TestHandleError:
 class TestResetCommand:
     def test_reset_empty_index(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
-             patch("sentrysearch.store.detect_backend", return_value="gemini"):
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)):
             inst = MagicMock()
             inst.get_stats.return_value = {
                 "total_chunks": 0, "unique_source_files": 0, "source_files": [],
@@ -230,7 +292,7 @@ class TestResetCommand:
 
     def test_reset_removes_all(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
-             patch("sentrysearch.store.detect_backend", return_value="gemini"):
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)):
             inst = MagicMock()
             inst.get_stats.return_value = {
                 "total_chunks": 10, "unique_source_files": 2,
@@ -247,7 +309,7 @@ class TestResetCommand:
 class TestRemoveCommand:
     def test_remove_matching_file(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
-             patch("sentrysearch.store.detect_backend", return_value="gemini"):
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)):
             inst = MagicMock()
             inst.get_stats.return_value = {
                 "total_chunks": 10, "unique_source_files": 2,
@@ -262,7 +324,7 @@ class TestRemoveCommand:
 
     def test_remove_no_match(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
-             patch("sentrysearch.store.detect_backend", return_value="gemini"):
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)):
             inst = MagicMock()
             inst.get_stats.return_value = {
                 "total_chunks": 10, "unique_source_files": 1,
@@ -275,7 +337,7 @@ class TestRemoveCommand:
 
     def test_remove_empty_index(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
-             patch("sentrysearch.store.detect_backend", return_value="gemini"):
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)):
             inst = MagicMock()
             inst.get_stats.return_value = {
                 "total_chunks": 0, "unique_source_files": 0, "source_files": [],

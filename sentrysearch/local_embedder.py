@@ -22,6 +22,50 @@ MODEL_ALIASES: dict[str, str] = {
     "qwen2b": "Qwen/Qwen3-VL-Embedding-2B",
 }
 
+# Reverse lookup: full HuggingFace ID → short alias
+_REVERSE_ALIASES: dict[str, str] = {v: k for k, v in MODEL_ALIASES.items()}
+
+
+def normalize_model_key(model: str) -> str:
+    """Return canonical short key for a model (used in collection names)."""
+    if model in MODEL_ALIASES:
+        return model
+    if model in _REVERSE_ALIASES:
+        return _REVERSE_ALIASES[model]
+    # Custom model: sanitize for use as collection name suffix
+    return model.replace("/", "_").replace("-", "_").lower()
+
+
+def detect_default_model() -> str:
+    """Pick the best default local model based on available hardware.
+
+    Returns 'qwen8b' for NVIDIA GPUs and high-memory Apple Silicon Macs,
+    'qwen2b' for lower-memory Macs and CPU-only systems.
+    """
+    try:
+        import torch
+    except ImportError:
+        return "qwen8b"
+
+    if torch.cuda.is_available():
+        return "qwen8b"
+
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        # Apple Silicon unified memory — 8B needs ~16 GB in float16
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=5,
+            )
+            mem_gb = int(result.stdout.strip()) / (1024 ** 3)
+            return "qwen8b" if mem_gb >= 24 else "qwen2b"
+        except Exception:
+            return "qwen2b"
+
+    # CPU-only — 2B is more practical
+    return "qwen2b"
+
 
 class LocalEmbedder(BaseEmbedder):
     """Qwen3-VL-Embedding backend (local GPU inference)."""
