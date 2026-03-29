@@ -24,7 +24,7 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 ```bash
 git clone https://github.com/ssrajadh/sentrysearch.git
 cd sentrysearch
-uv sync
+uv tool install .
 ```
 
 3. Set up your API key:
@@ -113,14 +113,15 @@ The default model is **Qwen3-VL-Embedding-8B**. Pick an install based on your ha
 
 | Hardware | Install command | Model | Notes |
 |---|---|---|---|
-| **Apple Silicon, 24 GB+ RAM** | `uv sync --extra local` | 8B (default) | Full float16 via MPS |
-| **Apple Silicon, 16 GB RAM** | `uv sync --extra local` | `--model qwen2b` | 8B won't fit; 2B uses ~6 GB |
-| **NVIDIA, 18 GB+ VRAM** | `uv sync --extra local` | 8B (default) | Full bf16 precision |
-| **NVIDIA, 8–16 GB VRAM** | `uv sync --extra local-quantized` | 8B (default) | 4-bit quantization (~6–8 GB) |
+| **Apple Silicon, 24 GB+ RAM** | `uv tool install ".[local]"` | 8B (default) | Full float16 via MPS |
+| **Apple Silicon, 16 GB RAM** | `uv tool install ".[local]"` | `--model qwen2b` | 8B won't fit; 2B uses ~6 GB |
+| **Apple Silicon, 8 GB RAM** | `uv tool install ".[local]"` | `--model qwen2b` | Tight — may swap under load; Gemini API recommended instead |
+| **NVIDIA, 18 GB+ VRAM** | `uv tool install ".[local]"` | 8B (default) | Full bf16 precision |
+| **NVIDIA, 8–16 GB VRAM** | `uv tool install ".[local-quantized]"` | 8B (default) | 4-bit quantization (~6–8 GB) |
 
-> **Won't work well:** Intel Macs, machines without a dedicated GPU, and Apple Silicon with 8 GB RAM. These fall back to CPU with float32 — too slow and memory-hungry for practical use. Use the **Gemini API backend** (the default) instead.
+> **Won't work well:** Intel Macs and machines without a dedicated GPU. These fall back to CPU with float32 — too slow and memory-hungry for practical use. Use the **Gemini API backend** (the default) instead.
 
-> **Not sure?** On Mac, use `--extra local`. On NVIDIA, use `--extra local-quantized` — 4-bit quantization works on the widest range of NVIDIA hardware with minimal quality loss. (bitsandbytes requires CUDA and does not work on Mac/MPS.)
+> **Not sure?** On Mac, use `".[local]"`. On NVIDIA, use `".[local-quantized]"` — 4-bit quantization works on the widest range of NVIDIA hardware with minimal quality loss. (bitsandbytes requires CUDA and does not work on Mac/MPS.)
 
 Index and search with `--backend local`:
 
@@ -163,7 +164,7 @@ Requirements:
 Install with Tesla overlay support:
 
 ```bash
-uv sync --extra tesla
+uv tool install ".[tesla]"
 ```
 
 Without geopy, the overlay still works but omits the city/road name.
@@ -229,4 +230,4 @@ This works with any footage in mp4 format, not just Tesla Sentry Mode. The direc
 - Python 3.11+
 - `ffmpeg` on PATH, or use bundled ffmpeg via `imageio-ffmpeg` (installed by default)
 - **Gemini backend:** Gemini API key ([get one free](https://aistudio.google.com/apikey))
-- **Local backend:** GPU with CUDA or Apple Metal recommended; `uv sync --extra local`
+- **Local backend:** GPU with CUDA or Apple Metal recommended; `uv tool install ".[local]"`
