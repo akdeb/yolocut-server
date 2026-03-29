@@ -123,6 +123,12 @@ The default model is **Qwen3-VL-Embedding-8B**. Pick an install based on your ha
 
 > **Not sure?** On Mac, use `".[local]"`. On NVIDIA, use `".[local-quantized]"` — 4-bit quantization works on the widest range of NVIDIA hardware with minimal quality loss. (bitsandbytes requires CUDA and does not work on Mac/MPS.)
 
+**Mac prerequisite:** Install system FFmpeg (needed by the video decoder):
+
+```bash
+brew install ffmpeg
+```
+
 Index and search with `--backend local`:
 
 ```bash
@@ -138,6 +144,7 @@ Notes:
 - First run downloads the model (~16 GB for 8B, ~4 GB for 2B).
 - Embeddings from Gemini and local backends are **not compatible** — an index built with one backend cannot be searched with the other. Re-index if you switch backends.
 - Switching models (e.g. 8B → 2B) also produces incompatible embeddings — re-index if you change models.
+- Speed varies by GPU core count — base M-series chips are slower than Pro/Max but produce identical results.
 
 ### Tesla Metadata Overlay
 
@@ -230,4 +237,7 @@ This works with any footage in mp4 format, not just Tesla Sentry Mode. The direc
 - Python 3.11+
 - `ffmpeg` on PATH, or use bundled ffmpeg via `imageio-ffmpeg` (installed by default)
 - **Gemini backend:** Gemini API key ([get one free](https://aistudio.google.com/apikey))
-- **Local backend:** GPU with CUDA or Apple Metal recommended; `uv tool install ".[local]"`
+- **Local backend:**
+  - GPU with CUDA or Apple Metal (see [hardware table](#local-backend-no-api-key-needed) for VRAM/RAM requirements)
+  - **macOS:** `brew install ffmpeg` (required by the video decoder)
+  - **Linux/Windows:** no extra system dependencies
