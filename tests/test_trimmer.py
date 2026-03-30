@@ -111,3 +111,10 @@ class TestTrimTopResults:
     def test_empty_results_raises(self, tmp_path):
         with pytest.raises(ValueError, match="No results"):
             trim_top_results([], str(tmp_path))
+
+    def test_zero_count_raises(self, tiny_video, tmp_path):
+        results = [
+            {"source_file": tiny_video, "start_time": 0.5, "end_time": 1.5, "similarity_score": 0.95},
+        ]
+        with pytest.raises(ValueError, match="count must be at least 1"):
+            trim_top_results(results, str(tmp_path), count=0)

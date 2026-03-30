@@ -382,7 +382,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
               help="Directory to save trimmed clips.")
 @click.option("--trim/--no-trim", default=True, show_default=True,
               help="Auto-trim the top result.")
-@click.option("--save-top", default=None, type=int,
+@click.option("--save-top", default=None, type=click.IntRange(min=1),
               help="Save the top N clips to the output directory (e.g. --save-top 3).")
 @click.option("--threshold", default=0.41, show_default=True, type=float,
               help="Minimum similarity score to consider a confident match.")
@@ -449,6 +449,10 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
 
         get_embedder(backend, model=model, quantize=quantize)
 
+        # Ensure we fetch enough results for --save-top
+        if save_top is not None and save_top > n_results:
+            n_results = save_top
+
         if verbose:
             click.echo(f"  [verbose] backend={backend}, similarity threshold: {threshold}", err=True)
 
@@ -500,34 +504,21 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
                 ):
                     return
 
-            if save_top is not None:
-                from .trimmer import trim_top_results
-                clip_paths = trim_top_results(results, output_dir, count=save_top)
+            from .trimmer import trim_top_results
+            count = save_top if save_top is not None else 1
+            clip_paths = trim_top_results(results, output_dir, count=count)
 
-                for i, clip_path in enumerate(clip_paths):
-                    if overlay:
-                        r = results[i]
-                        _apply_overlay_to_clip(
-                            clip_path, r["source_file"],
-                            r["start_time"], r["end_time"],
-                        )
-                    click.echo(f"\nSaved clip: {clip_path}")
-
-                if clip_paths:
-                    _open_file(clip_paths[0])
-            else:
-                from .trimmer import trim_top_result
-                clip_path = trim_top_result(results, output_dir)
-
+            for i, clip_path in enumerate(clip_paths):
                 if overlay:
-                    top = results[0]
+                    r = results[i]
                     _apply_overlay_to_clip(
-                        clip_path, top["source_file"],
-                        top["start_time"], top["end_time"],
+                        clip_path, r["source_file"],
+                        r["start_time"], r["end_time"],
                     )
-
                 click.echo(f"\nSaved clip: {clip_path}")
-                _open_file(clip_path)
+
+            if clip_paths:
+                _open_file(clip_paths[0])
 
     except Exception as e:
         _handle_error(e)
