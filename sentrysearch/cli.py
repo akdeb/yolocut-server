@@ -383,7 +383,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
 @click.option("--trim/--no-trim", default=True, show_default=True,
               help="Auto-trim the top result.")
 @click.option("--save-top", default=None, type=click.IntRange(min=1),
-              help="Save the top N clips to the output directory (e.g. --save-top 3).")
+              help="Save the top N matching clips instead of just the #1 result (e.g. --save-top 3).")
 @click.option("--threshold", default=0.41, show_default=True, type=float,
               help="Minimum similarity score to consider a confident match.")
 @click.option("--overlay/--no-overlay", default=False, show_default=True,
