@@ -141,7 +141,10 @@ class LocalEmbedder(BaseEmbedder):
         want_quantize = self._quantize
         if want_quantize is None and device == "cuda":
             # Auto: only quantize when VRAM is tight for the chosen model
-            vram_gb = torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+            props = torch.cuda.get_device_properties(0)
+            # Attribute renamed total_mem → total_memory in recent PyTorch
+            total_mem = getattr(props, "total_memory", None) or getattr(props, "total_mem", 0)
+            vram_gb = total_mem / (1024 ** 3)
             # 8B needs ~16 GB in bf16, 2B needs ~4 GB — add headroom
             needs_gb = 18 if "8B" in self._model_name else 6
             want_quantize = vram_gb < needs_gb

@@ -240,6 +240,28 @@ class TestSearchLocalFlags:
             assert "qwen2b" in result.output
             assert "qwen8b" in result.output
 
+    def test_search_save_top_calls_trim_top_results(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.search.search_footage", return_value=[
+                 {"source_file": "/a.mp4", "start_time": 0.0, "end_time": 30.0, "similarity_score": 0.9},
+                 {"source_file": "/a.mp4", "start_time": 30.0, "end_time": 60.0, "similarity_score": 0.8},
+                 {"source_file": "/a.mp4", "start_time": 60.0, "end_time": 90.0, "similarity_score": 0.7},
+             ]), \
+             patch("sentrysearch.trimmer.trim_top_results", return_value=["/clip1.mp4", "/clip2.mp4", "/clip3.mp4"]) as mock_trim:
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["search", "test", "--save-top", "3", "--no-trim"])
+            assert result.exit_code == 0
+            mock_trim.assert_called_once()
+            assert mock_trim.call_args[1]["count"] == 3
+
+    def test_search_save_top_rejects_zero(self, runner):
+        result = runner.invoke(cli, ["search", "test", "--save-top", "0"])
+        assert result.exit_code != 0
+
 
 class TestHandleError:
     def test_local_model_error(self, runner):

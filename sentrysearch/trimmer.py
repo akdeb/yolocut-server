@@ -133,27 +133,38 @@ def _safe_filename(source_file: str, start: float, end: float) -> str:
     return f"match_{base}_{_fmt_time(start)}-{_fmt_time(end)}.mp4"
 
 
-def trim_top_result(results: list[dict], output_dir: str) -> str:
-    """Trim the highest-ranked search result and save it to *output_dir*.
+def trim_top_results(results: list[dict], output_dir: str, count: int = 1) -> list[str]:
+    """Trim the top *count* search results and save them to *output_dir*.
 
     Args:
         results: List of result dicts from :func:`search_footage`
                  (must contain source_file, start_time, end_time).
-        output_dir: Directory to write the clip into.
+        output_dir: Directory to write clips into.
+        count: Number of top results to trim (must be >= 1).
 
     Returns:
-        Path to the saved clip.
+        List of paths to saved clips.
     """
     if not results:
         raise ValueError("No results to trim.")
+    if count < 1:
+        raise ValueError("count must be at least 1.")
 
-    top = results[0]
-    filename = _safe_filename(top["source_file"], top["start_time"], top["end_time"])
-    output_path = os.path.join(output_dir, filename)
+    paths = []
+    for r in results[:count]:
+        filename = _safe_filename(r["source_file"], r["start_time"], r["end_time"])
+        output_path = os.path.join(output_dir, filename)
+        clip = trim_clip(
+            source_file=r["source_file"],
+            start_time=r["start_time"],
+            end_time=r["end_time"],
+            output_path=output_path,
+        )
+        paths.append(clip)
 
-    return trim_clip(
-        source_file=top["source_file"],
-        start_time=top["start_time"],
-        end_time=top["end_time"],
-        output_path=output_path,
-    )
+    return paths
+
+
+def trim_top_result(results: list[dict], output_dir: str) -> str:
+    """Trim the highest-ranked search result and save it to *output_dir*."""
+    return trim_top_results(results, output_dir, count=1)[0]

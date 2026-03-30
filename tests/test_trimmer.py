@@ -4,7 +4,13 @@ import os
 
 import pytest
 
-from sentrysearch.trimmer import _fmt_time, _safe_filename, trim_clip, trim_top_result
+from sentrysearch.trimmer import (
+    _fmt_time,
+    _safe_filename,
+    trim_clip,
+    trim_top_result,
+    trim_top_results,
+)
 
 
 class TestFmtTime:
@@ -70,3 +76,45 @@ class TestTrimTopResult:
     def test_empty_results_raises(self, tmp_path):
         with pytest.raises(ValueError, match="No results"):
             trim_top_result([], str(tmp_path))
+
+
+class TestTrimTopResults:
+    def test_trims_multiple_results(self, tiny_video, tmp_path):
+        results = [
+            {"source_file": tiny_video, "start_time": 0.5, "end_time": 1.5, "similarity_score": 0.95},
+            {"source_file": tiny_video, "start_time": 1.0, "end_time": 2.0, "similarity_score": 0.85},
+            {"source_file": tiny_video, "start_time": 1.5, "end_time": 2.5, "similarity_score": 0.75},
+        ]
+        clips = trim_top_results(results, str(tmp_path), count=3)
+        assert len(clips) == 3
+        for clip in clips:
+            assert os.path.isfile(clip)
+            assert clip.startswith(str(tmp_path))
+
+    def test_count_limits_output(self, tiny_video, tmp_path):
+        results = [
+            {"source_file": tiny_video, "start_time": 0.5, "end_time": 1.5, "similarity_score": 0.95},
+            {"source_file": tiny_video, "start_time": 1.0, "end_time": 2.0, "similarity_score": 0.85},
+            {"source_file": tiny_video, "start_time": 1.5, "end_time": 2.5, "similarity_score": 0.75},
+        ]
+        clips = trim_top_results(results, str(tmp_path), count=2)
+        assert len(clips) == 2
+
+    def test_count_exceeding_results_trims_all(self, tiny_video, tmp_path):
+        results = [
+            {"source_file": tiny_video, "start_time": 0.5, "end_time": 1.5, "similarity_score": 0.95},
+        ]
+        clips = trim_top_results(results, str(tmp_path), count=5)
+        assert len(clips) == 1
+        assert os.path.isfile(clips[0])
+
+    def test_empty_results_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="No results"):
+            trim_top_results([], str(tmp_path))
+
+    def test_zero_count_raises(self, tiny_video, tmp_path):
+        results = [
+            {"source_file": tiny_video, "start_time": 0.5, "end_time": 1.5, "similarity_score": 0.95},
+        ]
+        with pytest.raises(ValueError, match="count must be at least 1"):
+            trim_top_results(results, str(tmp_path), count=0)

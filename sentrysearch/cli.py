@@ -382,6 +382,8 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
               help="Directory to save trimmed clips.")
 @click.option("--trim/--no-trim", default=True, show_default=True,
               help="Auto-trim the top result.")
+@click.option("--save-top", default=None, type=click.IntRange(min=1),
+              help="Save the top N clips to the output directory (e.g. --save-top 3).")
 @click.option("--threshold", default=0.41, show_default=True, type=float,
               help="Minimum similarity score to consider a confident match.")
 @click.option("--overlay/--no-overlay", default=False, show_default=True,
@@ -394,7 +396,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
-def search(query, n_results, output_dir, trim, threshold, overlay, backend, model, quantize, verbose):
+def search(query, n_results, output_dir, trim, save_top, threshold, overlay, backend, model, quantize, verbose):
     """Search indexed footage with a natural language QUERY."""
     from .embedder import get_embedder, reset_embedder
     from .local_embedder import normalize_model_key
@@ -447,6 +449,10 @@ def search(query, n_results, output_dir, trim, threshold, overlay, backend, mode
 
         get_embedder(backend, model=model, quantize=quantize)
 
+        # Ensure we fetch enough results for --save-top
+        if save_top is not None and save_top > n_results:
+            n_results = save_top
+
         if verbose:
             click.echo(f"  [verbose] backend={backend}, similarity threshold: {threshold}", err=True)
 
@@ -488,7 +494,8 @@ def search(query, n_results, output_dir, trim, threshold, overlay, backend, mode
                     f"@ {start_str}-{end_str}"
                 )
 
-        if trim:
+        should_trim = trim or save_top is not None
+        if should_trim:
             if low_confidence:
                 if not click.confirm(
                     f"No confident match found (best score: {best_score:.2f}). "
@@ -497,18 +504,21 @@ def search(query, n_results, output_dir, trim, threshold, overlay, backend, mode
                 ):
                     return
 
-            from .trimmer import trim_top_result
-            clip_path = trim_top_result(results, output_dir)
+            from .trimmer import trim_top_results
+            count = save_top if save_top is not None else 1
+            clip_paths = trim_top_results(results, output_dir, count=count)
 
-            if overlay:
-                top = results[0]
-                _apply_overlay_to_clip(
-                    clip_path, top["source_file"],
-                    top["start_time"], top["end_time"],
-                )
+            for i, clip_path in enumerate(clip_paths):
+                if overlay:
+                    r = results[i]
+                    _apply_overlay_to_clip(
+                        clip_path, r["source_file"],
+                        r["start_time"], r["end_time"],
+                    )
+                click.echo(f"\nSaved clip: {clip_path}")
 
-            click.echo(f"\nSaved clip: {clip_path}")
-            _open_file(clip_path)
+            if clip_paths:
+                _open_file(clip_paths[0])
 
     except Exception as e:
         _handle_error(e)
