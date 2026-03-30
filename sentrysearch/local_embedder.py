@@ -269,8 +269,18 @@ class LocalEmbedder(BaseEmbedder):
 
         import torch
         import torch.nn.functional as F
-        from qwen_vl_utils import process_vision_info
         from pathlib import Path
+
+        # Prefer torchcodec for video reading — torchvision removed
+        # read_video in v0.22+
+        if "FORCE_QWENVL_VIDEO_READER" not in os.environ:
+            try:
+                import torchcodec  # noqa: F401
+                os.environ["FORCE_QWENVL_VIDEO_READER"] = "torchcodec"
+            except ImportError:
+                pass
+
+        from qwen_vl_utils import process_vision_info
 
         chunk_path = Path(chunk_path)
         if not chunk_path.exists():
