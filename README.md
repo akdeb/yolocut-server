@@ -105,7 +105,7 @@ No confident match found (best score: 0.28). Show results anyway? [y/N]:
 
 With `--no-trim`, low-confidence results are shown with a note instead of a prompt.
 
-Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff. Backend and model are auto-detected from the index — pass `--backend` or `--model` only to override.
+Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff, `--save-top N` to save the top N clips instead of just the best match. Backend and model are auto-detected from the index — pass `--backend` or `--model` only to override.
 
 ### Local Backend (no API key needed)
 
