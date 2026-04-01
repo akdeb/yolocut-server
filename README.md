@@ -242,6 +242,14 @@ Tuning options:
 - `--target-resolution` / `--target-fps` — adjust preprocessing quality
 - `--no-preprocess` — send raw chunks to the API
 
+## Known Warnings (harmless)
+
+The local backend may print warnings during indexing and search. These are cosmetic and don't affect results:
+
+- **`MPS: nonzero op is not natively supported`** — A known PyTorch limitation on Apple Silicon. The operation falls back to CPU for one step; everything else stays on the GPU. No impact on output quality.
+- **`video_reader_backend torchcodec error, use torchvision as default`** — torchcodec can't find a compatible FFmpeg on macOS. The video processor falls back to torchvision automatically. This is expected and produces identical results.
+- **`You are sending unauthenticated requests to the HF Hub`** — The model downloads from Hugging Face without a token. Download speeds may be slightly lower, but the model loads fine. Set a `HF_TOKEN` environment variable to silence this if it bothers you.
+
 ## Limitations & Future Work
 
 - **Still-frame detection is heuristic** — it uses JPEG file size comparison across sampled frames. It may occasionally skip chunks with subtle motion or embed chunks that are truly static. Disable with `--no-skip-still` if you need every chunk indexed.
