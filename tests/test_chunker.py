@@ -141,9 +141,9 @@ class TestScanDirectory:
     def test_finds_supported_video_files(self, tmp_path):
         (tmp_path / "a.mp4").write_text("fake")
         (tmp_path / "b.MP4").write_text("fake")
-        (tmp_path / "c.mov").write_text("fake")
-        (tmp_path / "d.MOV").write_text("fake")
-        (tmp_path / "c.txt").write_text("nope")
+        (tmp_path / "clip.mov").write_text("fake")
+        (tmp_path / "clip2.MOV").write_text("fake")
+        (tmp_path / "notes.txt").write_text("nope")
         sub = tmp_path / "sub"
         sub.mkdir()
         (sub / "e.mp4").write_text("fake")
