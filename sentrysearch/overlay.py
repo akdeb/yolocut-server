@@ -32,16 +32,6 @@ def _get_ass_ffmpeg() -> str:
             [candidate, "-filters"],
             capture_output=True, text=True, timeout=5,
         )
-        if "->V" in r.stdout and "ass" in r.stdout.split("->V")[0].split("\n")[-1]:
-            return candidate
-        # check properly by looking for the ass filter line
-        for line in r.stdout.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("...") or stripped.startswith("T"):
-                parts = stripped.split()
-                if len(parts) >= 2 and parts[1] == "ass":
-                    return candidate
-        # direct check: look for ' ass ' in filter list
         if re.search(r"\bass\b.*V->V", r.stdout):
             return candidate
     except Exception:
@@ -248,7 +238,6 @@ def _chevron_left(scale: float) -> str:
     return f"m {w} {-h} l {-w} 0 {w} {h}"
 
 
-
 def _build_ass_content(
     samples: list[dict],
     clip_duration: float,
@@ -278,7 +267,7 @@ def _build_ass_content(
     dt_y = status_y + int(20 * scale)
 
     # turn signal positions (flanking speed)
-    blinker_offset = int(55 * scale)
+    blinker_offset = int(80 * scale)
     blinker_y = speed_y + int(4 * scale)
 
     # bottom-left info block
@@ -318,7 +307,7 @@ def _build_ass_content(
             f"Dialogue: {layer},{start},{end},{style},,0,0,0,,{text}"
         )
 
-    # --- static location (top-left, full duration) --------------------------
+    # --- static elements (full duration) --------------------------------------
     if location_line:
         _ev(1, "0:00:00.00", end_all, "Loc", location_line)
 
@@ -360,13 +349,13 @@ def _build_ass_content(
 
         _ev(
             3, ass_s, ass_e, "Draw",
-            f"{{\\an5\\pos({cx - blinker_offset},{blinker_y})"
+            f"{{\\an6\\pos({cx - blinker_offset + int(8 * scale)},{blinker_y})"
             f"\\c{left_col}{left_alpha}\\bord0\\shad0"
             f"\\p1}}{_chevron_left(scale)}",
         )
         _ev(
             3, ass_s, ass_e, "Draw",
-            f"{{\\an5\\pos({cx + blinker_offset},{blinker_y})"
+            f"{{\\an4\\pos({cx + blinker_offset},{blinker_y})"
             f"\\c{right_col}{right_alpha}\\bord0\\shad0"
             f"\\p1}}{_chevron_right(scale)}",
         )
@@ -501,8 +490,6 @@ def apply_overlay(
         with os.fdopen(ass_fd, "w") as f:
             f.write(ass_content)
 
-        # No drawbox needed -- the new design uses text shadows instead of
-        # a solid background card, matching the native Tesla look.
         escaped = ass_path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         vf = f"ass={escaped}"
 
