@@ -32,17 +32,17 @@ def _get_ass_ffmpeg() -> str:
             [candidate, "-filters"],
             capture_output=True, text=True, timeout=5,
         )
-        if "->V" in r.stderr and "ass" in r.stderr.split("->V")[0].split("\n")[-1]:
+        if "->V" in r.stdout and "ass" in r.stdout.split("->V")[0].split("\n")[-1]:
             return candidate
         # check properly by looking for the ass filter line
-        for line in r.stderr.splitlines():
+        for line in r.stdout.splitlines():
             stripped = line.strip()
             if stripped.startswith("...") or stripped.startswith("T"):
                 parts = stripped.split()
                 if len(parts) >= 2 and parts[1] == "ass":
                     return candidate
         # direct check: look for ' ass ' in filter list
-        if re.search(r"\bass\b.*V->V", r.stderr):
+        if re.search(r"\bass\b.*V->V", r.stdout):
             return candidate
     except Exception:
         pass
@@ -235,31 +235,18 @@ def _get_video_dimensions(video_path: str) -> tuple[int, int]:
 
 
 def _chevron_right(scale: float) -> str:
-    """Right-pointing turn signal chevron, ASS drawing commands."""
+    """Right-pointing turn signal chevron (>), ASS drawing commands."""
     s = scale
     w, h = int(10 * s), int(16 * s)
-    return f"m 0 {-h} l {w} 0 0 {h} {-w} 0"
+    return f"m {-w} {-h} l {w} 0 {-w} {h}"
 
 
 def _chevron_left(scale: float) -> str:
-    """Left-pointing turn signal chevron, ASS drawing commands."""
+    """Left-pointing turn signal chevron (<), ASS drawing commands."""
     s = scale
     w, h = int(10 * s), int(16 * s)
-    return f"m 0 {-h} l {-w} 0 0 {h} {w} 0"
+    return f"m {w} {-h} l {-w} 0 {w} {h}"
 
-
-def _steering_arc(angle_deg: float, scale: float) -> str:
-    """Small arc indicator for steering wheel angle, drawn with ASS bezier."""
-    r = int(12 * scale)
-    cp = int(7 * scale)
-    # Full circle, we rotate the indicator dot based on angle
-    return (
-        f"m 0 -{r} "
-        f"b {cp} -{r} {r} -{cp} {r} 0 "
-        f"b {r} {cp} {cp} {r} 0 {r} "
-        f"b -{cp} {r} -{r} {cp} -{r} 0 "
-        f"b -{r} -{cp} -{cp} -{r} 0 -{r}"
-    )
 
 
 def _build_ass_content(
