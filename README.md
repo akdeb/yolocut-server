@@ -14,10 +14,16 @@ SentrySearch splits your videos into overlapping chunks, embeds each chunk as vi
 
 1. Install [uv](https://docs.astral.sh/uv/) (if you don't have it):
 
+**macOS/Linux:**
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh    # macOS/Linux
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+**Windows:**
+```powershell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
 
 2. Clone and install:
 
