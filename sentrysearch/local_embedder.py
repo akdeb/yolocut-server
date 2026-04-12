@@ -227,6 +227,14 @@ class LocalEmbedder(BaseEmbedder):
             )
 
             load_kwargs = dict(trust_remote_code=True)
+            if device == "mps":
+                # MPS SDPA crashes on grouped-query attention (mismatched
+                # head counts in batched matmul).  Use eager attention.
+                load_kwargs["attn_implementation"] = "eager"
+                # transformers >=5.3 has a spurious assertion that reports
+                # "Video features and video tokens do not match" even when
+                # the counts are identical.  Disable the check on MPS.
+                os.environ.setdefault("TRANSFORMERS_DISABLE_TORCH_CHECK", "1")
             if quantization_config is not None:
                 load_kwargs["quantization_config"] = quantization_config
             else:
