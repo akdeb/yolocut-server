@@ -134,6 +134,12 @@ def chunk_video(
         The caller is responsible for cleaning up the temporary chunk files
         returned in chunk_path.
     """
+    if overlap >= chunk_duration:
+        raise ValueError(
+            f"overlap ({overlap}s) must be less than chunk_duration ({chunk_duration}s). "
+            "When overlap >= chunk_duration the step between chunks is <= 0, "
+            "causing an infinite loop."
+        )
     video_path = str(Path(video_path).resolve())
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")

@@ -255,6 +255,12 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
     from .store import SentryStore
 
     try:
+        if overlap >= chunk_duration:
+            raise click.BadParameter(
+                f"overlap ({overlap}s) must be less than chunk_duration ({chunk_duration}s).",
+                param_hint="'--overlap'",
+            )
+
         # --model implies --backend local
         if model is not None and backend is None:
             backend = "local"
