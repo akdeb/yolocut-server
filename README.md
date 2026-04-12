@@ -124,7 +124,7 @@ The model is **auto-detected from your hardware** — qwen8b for NVIDIA GPUs and
 | **Apple Silicon, 24 GB+ RAM** | `uv tool install ".[local]"` | qwen8b | Full float16 via MPS |
 | **Apple Silicon, 16 GB RAM** | `uv tool install ".[local]"` | qwen2b | 8B won't fit; 2B uses ~6 GB |
 | **Apple Silicon, 8 GB RAM** | `uv tool install ".[local]"` | qwen2b | Tight — may swap under load; Gemini API recommended instead |
-| **NVIDIA, 18 GB+ VRAM** | `uv tool install ".[local]"` | qwen8b | Full bf16 precision |
+| **NVIDIA, 18 GB+ VRAM** | `uv tool install ".[local]"` | qwen8b | Full bf16 precision (CUDA wheels pulled automatically on Linux/Windows) |
 | **NVIDIA, 8–16 GB VRAM** | `uv tool install ".[local-quantized]"` | qwen8b | 4-bit quantization (~6–8 GB) |
 
 > **Won't work well:** Intel Macs and machines without a dedicated GPU. These fall back to CPU with float32 — too slow and memory-hungry for practical use. Use the **Gemini API backend** (the default) instead.
