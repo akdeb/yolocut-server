@@ -109,6 +109,14 @@ class TestChunkVideo:
         shutil.rmtree(os.path.dirname(chunks[0]["chunk_path"]),
                        ignore_errors=True)
 
+    def test_overlap_equal_to_chunk_duration_raises(self, tiny_video):
+        with pytest.raises(ValueError, match="overlap.*must be less than"):
+            chunk_video(tiny_video, chunk_duration=5, overlap=5)
+
+    def test_overlap_greater_than_chunk_duration_raises(self, tiny_video):
+        with pytest.raises(ValueError, match="overlap.*must be less than"):
+            chunk_video(tiny_video, chunk_duration=5, overlap=10)
+
     def test_nonexistent_file_raises(self):
         with pytest.raises(FileNotFoundError):
             chunk_video("/nonexistent/video.mp4")

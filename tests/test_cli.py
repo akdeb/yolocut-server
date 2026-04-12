@@ -130,6 +130,27 @@ class TestIndexCommand:
         mock_store.add_chunks.assert_called_once()
 
 
+    def test_index_overlap_equal_chunk_duration_errors(self, runner, tmp_path):
+        d = tmp_path / "vids"
+        d.mkdir()
+        (d / "test.mp4").write_bytes(b"fake")
+        result = runner.invoke(cli, [
+            "index", str(d), "--chunk-duration", "5", "--overlap", "5",
+        ])
+        assert result.exit_code != 0
+        assert "overlap" in result.output.lower()
+
+    def test_index_overlap_greater_than_chunk_duration_errors(self, runner, tmp_path):
+        d = tmp_path / "vids"
+        d.mkdir()
+        (d / "test.mp4").write_bytes(b"fake")
+        result = runner.invoke(cli, [
+            "index", str(d), "--chunk-duration", "5", "--overlap", "10",
+        ])
+        assert result.exit_code != 0
+        assert "overlap" in result.output.lower()
+
+
 class TestIndexLocalFlags:
     def test_index_passes_model_to_embedder(self, runner, tmp_path):
         empty_dir = tmp_path / "empty"
