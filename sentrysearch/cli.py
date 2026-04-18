@@ -316,7 +316,9 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
     """Index supported video files in DIRECTORY for searching."""
     from .chunker import (
         SUPPORTED_VIDEO_EXTENSIONS,
+        _get_video_duration,
         chunk_video,
+        expected_chunk_spans,
         is_still_frame_chunk,
         preprocess_chunk,
         scan_directory,
@@ -375,6 +377,28 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
         for file_idx, video_path in enumerate(videos, 1):
             abs_path = os.path.abspath(video_path)
             basename = os.path.basename(video_path)
+
+            # Fast path: if every expected chunk ID is already in the store,
+            # skip ffmpeg splitting entirely. A mismatch (e.g. due to
+            # still-frame chunks that were skipped rather than stored) falls
+            # through to the normal path.
+            try:
+                duration = _get_video_duration(abs_path)
+                expected_spans = expected_chunk_spans(
+                    duration, chunk_duration=chunk_duration, overlap=overlap,
+                )
+                if expected_spans and all(
+                    store.has_chunk(store.make_chunk_id(abs_path, s))
+                    for s, _ in expected_spans
+                ):
+                    click.echo(
+                        f"Skipping ({file_idx}/{total_files}): {basename} "
+                        f"(already indexed)"
+                    )
+                    continue
+            except Exception:
+                # Duration probe failed — let chunk_video surface the error
+                pass
 
             chunks = chunk_video(abs_path, chunk_duration=chunk_duration, overlap=overlap)
             num_chunks = len(chunks)

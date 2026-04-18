@@ -261,6 +261,30 @@ class TestIndexCommand:
         mock_store.add_chunk.assert_not_called()
 
 
+    def test_index_skips_fully_indexed_file_without_chunking(self, runner, tmp_path):
+        """When every expected chunk is already stored, chunk_video must not run."""
+        d = tmp_path / "vids"
+        d.mkdir()
+        source = d / "video.mp4"
+        source.write_bytes(b"fake")
+
+        mock_store = MagicMock()
+        mock_store.has_chunk.return_value = True  # every chunk present
+        mock_store.make_chunk_id.side_effect = lambda p, s: f"{p}:{s}"
+        mock_store.get_stats.return_value = {
+            "total_chunks": 3, "unique_source_files": 1,
+        }
+
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.chunker._get_video_duration", return_value=90.0), \
+             patch("sentrysearch.chunker.chunk_video") as mock_chunk_video:
+            result = runner.invoke(cli, ["index", str(d), "--no-preprocess"])
+
+        assert result.exit_code == 0, result.output
+        mock_chunk_video.assert_not_called()
+        assert "already indexed" in result.output
+
     def test_index_retry_failed_reattempts_dlq_chunks(self, runner, tmp_path):
         d = tmp_path / "vids"
         d.mkdir()
