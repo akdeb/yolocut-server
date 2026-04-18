@@ -96,6 +96,15 @@ class TestSentryStore:
         tmp_store.add_chunk("same_id", emb2, meta)
         assert tmp_store.get_stats()["total_chunks"] == 1
 
+    def test_has_chunk(self, tmp_store):
+        cid = tmp_store.make_chunk_id("v.mp4", 30.0)
+        assert not tmp_store.has_chunk(cid)
+        tmp_store.add_chunk(cid, _make_embedding(), {
+            "source_file": "v.mp4", "start_time": 30.0, "end_time": 60.0,
+        })
+        assert tmp_store.has_chunk(cid)
+        assert not tmp_store.has_chunk("nonexistent_id")
+
     def test_is_indexed(self, tmp_store):
         assert not tmp_store.is_indexed("nonexistent.mp4")
         tmp_store.add_chunk("x", _make_embedding(), {

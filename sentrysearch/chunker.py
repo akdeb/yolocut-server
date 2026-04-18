@@ -115,6 +115,38 @@ def _get_video_duration(video_path: str) -> float:
     return _parse_duration_from_ffmpeg_output(result.stderr)
 
 
+def expected_chunk_spans(
+    duration: float,
+    chunk_duration: int = 30,
+    overlap: int = 5,
+) -> list[tuple[float, float]]:
+    """Return the (start, end) spans that ``chunk_video`` would produce
+    for a video of the given duration, without actually splitting it.
+
+    Used to compute expected chunk IDs for resume/skip logic so we can
+    avoid invoking ffmpeg on already-indexed files.
+    """
+    if overlap >= chunk_duration:
+        raise ValueError(
+            f"overlap ({overlap}s) must be less than chunk_duration ({chunk_duration}s). "
+            "When overlap >= chunk_duration the step between chunks is <= 0, "
+            "causing an infinite loop."
+        )
+    if duration <= chunk_duration:
+        return [(0.0, float(duration))]
+
+    step = chunk_duration - overlap
+    spans: list[tuple[float, float]] = []
+    start = 0.0
+    while start < duration:
+        end = min(start + chunk_duration, duration)
+        spans.append((start, end))
+        start += step
+        if start + overlap >= duration:
+            break
+    return spans
+
+
 def chunk_video(
     video_path: str,
     chunk_duration: int = 30,
@@ -134,54 +166,18 @@ def chunk_video(
         The caller is responsible for cleaning up the temporary chunk files
         returned in chunk_path.
     """
-    if overlap >= chunk_duration:
-        raise ValueError(
-            f"overlap ({overlap}s) must be less than chunk_duration ({chunk_duration}s). "
-            "When overlap >= chunk_duration the step between chunks is <= 0, "
-            "causing an infinite loop."
-        )
     video_path = str(Path(video_path).resolve())
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
     ffmpeg_exe = _get_ffmpeg_executable()
     duration = _get_video_duration(video_path)
+    spans = expected_chunk_spans(duration, chunk_duration, overlap)
     tmp_dir = tempfile.mkdtemp(prefix="sentrysearch_")
-    step = chunk_duration - overlap
     chunks = []
 
-    if duration <= chunk_duration:
-        chunk_path = os.path.join(tmp_dir, "chunk_000.mp4")
-        subprocess.run(
-            [
-                ffmpeg_exe,
-                "-y",
-                "-ss", "0",
-                "-i", video_path,
-                "-t", str(duration),
-                "-c", "copy",
-                chunk_path,
-            ],
-            capture_output=True,
-            check=True,
-        )
-        # Note: Caller is responsible for cleaning up chunk_path files
-        return [
-            {
-                "chunk_path": chunk_path,
-                "source_file": video_path,
-                "start_time": 0.0,
-                "end_time": duration,
-            }
-        ]
-
-    start = 0.0
-    idx = 0
-    while start < duration:
-        end = min(start + chunk_duration, duration)
+    for idx, (start, end) in enumerate(spans):
         t = end - start
         chunk_path = os.path.join(tmp_dir, f"chunk_{idx:03d}.mp4")
-
-        # Input seeking (-ss before -i) for fast seek
         subprocess.run(
             [
                 ffmpeg_exe,
@@ -195,22 +191,12 @@ def chunk_video(
             capture_output=True,
             check=True,
         )
-
-        chunks.append(
-            {
-                "chunk_path": chunk_path,
-                "source_file": video_path,
-                "start_time": start,
-                "end_time": end,
-            }
-        )
-
-        start += step
-        idx += 1
-
-        # Avoid a tiny trailing chunk that's entirely within the previous chunk
-        if start + overlap >= duration:
-            break
+        chunks.append({
+            "chunk_path": chunk_path,
+            "source_file": video_path,
+            "start_time": start,
+            "end_time": end,
+        })
 
     return chunks
 

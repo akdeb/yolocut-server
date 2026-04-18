@@ -216,6 +216,15 @@ class SentryStore:
         )
         return len(results["ids"]) > 0
 
+    def has_chunk(self, chunk_id: str) -> bool:
+        """Check whether a specific chunk ID is already stored."""
+        results = self._collection.get(ids=[chunk_id], limit=1)
+        return len(results["ids"]) > 0
+
+    def make_chunk_id(self, source_file: str, start_time: float) -> str:
+        """Return the deterministic chunk ID used by this store."""
+        return _make_chunk_id(source_file, start_time)
+
     def remove_file(self, source_file: str) -> int:
         """Remove all chunks for a given source file. Returns count removed."""
         results = self._collection.get(where={"source_file": source_file})

@@ -12,6 +12,7 @@ from sentrysearch.chunker import (
     _get_video_duration,
     _parse_duration_from_ffmpeg_output,
     chunk_video,
+    expected_chunk_spans,
     preprocess_chunk,
     scan_directory,
 )
@@ -120,6 +121,35 @@ class TestChunkVideo:
     def test_nonexistent_file_raises(self):
         with pytest.raises(FileNotFoundError):
             chunk_video("/nonexistent/video.mp4")
+
+
+class TestExpectedChunkSpans:
+    def test_short_video_single_span(self):
+        spans = expected_chunk_spans(3.0, chunk_duration=30, overlap=5)
+        assert spans == [(0.0, 3.0)]
+
+    def test_matches_chunk_video_starts(self, longer_video):
+        """Spans must match what chunk_video actually produces."""
+        chunks = chunk_video(longer_video, chunk_duration=4, overlap=1)
+        duration = _get_video_duration(longer_video)
+        spans = expected_chunk_spans(duration, chunk_duration=4, overlap=1)
+        assert len(spans) == len(chunks)
+        for (s, _e), chunk in zip(spans, chunks):
+            assert s == pytest.approx(chunk["start_time"], abs=0.01)
+        shutil.rmtree(os.path.dirname(chunks[0]["chunk_path"]),
+                       ignore_errors=True)
+
+    def test_invalid_overlap_raises(self):
+        with pytest.raises(ValueError, match="overlap.*must be less than"):
+            expected_chunk_spans(100.0, chunk_duration=5, overlap=5)
+
+    def test_long_video_multiple_spans(self):
+        spans = expected_chunk_spans(100.0, chunk_duration=30, overlap=5)
+        assert len(spans) > 1
+        # Step size = chunk_duration - overlap
+        assert spans[1][0] - spans[0][0] == pytest.approx(25.0)
+        # No span exceeds duration
+        assert all(e <= 100.0 for _, e in spans)
 
 
 # ---------------------------------------------------------------------------
