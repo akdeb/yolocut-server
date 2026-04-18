@@ -107,7 +107,8 @@ class TestIndexCommand:
         chunk_path.write_bytes(b"chunk")
 
         mock_store = MagicMock()
-        mock_store.is_indexed.return_value = False
+        mock_store.has_chunk.return_value = False
+        mock_store.make_chunk_id.return_value = "abc123"
         mock_store.get_stats.return_value = {
             "total_chunks": 1,
             "unique_source_files": 1,
@@ -127,7 +128,49 @@ class TestIndexCommand:
             result = runner.invoke(cli, ["index", str(d), "--no-preprocess"])
 
         assert result.exit_code == 0
-        mock_store.add_chunks.assert_called_once()
+        mock_store.add_chunk.assert_called_once()
+
+    def test_index_resumes_skipping_already_indexed_chunks(self, runner, tmp_path):
+        d = tmp_path / "vids"
+        d.mkdir()
+        source = d / "video.mp4"
+        source.write_bytes(b"fake")
+
+        chunk_dir = tmp_path / "chunks"
+        chunk_dir.mkdir()
+        chunks = []
+        for i in range(3):
+            p = chunk_dir / f"chunk_{i:03d}.mp4"
+            p.write_bytes(b"chunk")
+            chunks.append({
+                "chunk_path": str(p),
+                "source_file": str(source.resolve()),
+                "start_time": float(i * 30),
+                "end_time": float(i * 30 + 30),
+            })
+
+        mock_store = MagicMock()
+        # First two chunks already indexed, third one is new
+        mock_store.has_chunk.side_effect = [True, True, False]
+        mock_store.make_chunk_id.side_effect = ["id0", "id1", "id2"]
+        mock_store.get_stats.return_value = {
+            "total_chunks": 3, "unique_source_files": 1,
+        }
+        mock_embedder = MagicMock()
+        mock_embedder.embed_video_chunk.return_value = [0.1] * 768
+
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.embedder.get_embedder", return_value=mock_embedder), \
+             patch("sentrysearch.chunker.chunk_video", return_value=chunks), \
+             patch("sentrysearch.chunker.is_still_frame_chunk", return_value=False):
+            result = runner.invoke(cli, ["index", str(d), "--no-preprocess"])
+
+        assert result.exit_code == 0
+        # Only the third chunk should have been embedded/stored
+        assert mock_embedder.embed_video_chunk.call_count == 1
+        mock_store.add_chunk.assert_called_once()
+        args, _ = mock_store.add_chunk.call_args
+        assert args[0] == "id2"
 
 
     def test_index_overlap_equal_chunk_duration_errors(self, runner, tmp_path):

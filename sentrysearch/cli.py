@@ -302,13 +302,9 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
             abs_path = os.path.abspath(video_path)
             basename = os.path.basename(video_path)
 
-            if store.is_indexed(abs_path):
-                click.echo(f"Skipping ({file_idx}/{total_files}): {basename} (already indexed)")
-                continue
-
             chunks = chunk_video(abs_path, chunk_duration=chunk_duration, overlap=overlap)
             num_chunks = len(chunks)
-            embedded = []
+            file_new_chunks = 0
 
             if verbose:
                 click.echo(f"  [verbose] {basename}: duration split into {num_chunks} chunks", err=True)
@@ -317,6 +313,17 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
             files_to_cleanup = []
 
             for chunk_idx, chunk in enumerate(chunks, 1):
+                chunk_id = store.make_chunk_id(abs_path, chunk["start_time"])
+
+                if store.has_chunk(chunk_id):
+                    if verbose:
+                        click.echo(
+                            f"  [verbose] chunk {chunk_idx}/{num_chunks} already indexed — resuming",
+                            err=True,
+                        )
+                    files_to_cleanup.append(chunk["chunk_path"])
+                    continue
+
                 if skip_still and is_still_frame_chunk(
                     chunk["chunk_path"], verbose=verbose,
                 ):
@@ -324,7 +331,6 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
                         f"Skipping chunk {chunk_idx}/{num_chunks} (still frame)"
                     )
                     skipped_chunks += 1
-                    # Clean up the skipped chunk file
                     files_to_cleanup.append(chunk["chunk_path"])
                     continue
 
@@ -349,31 +355,31 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
                             f"({100 * (1 - new_size / original_size):.0f}% reduction)",
                             err=True,
                         )
-                    # Track preprocessed file for cleanup
                     if embed_path != chunk["chunk_path"]:
                         files_to_cleanup.append(embed_path)
 
                 embedding = embedder.embed_video_chunk(embed_path, verbose=verbose)
-                embedded.append({**chunk, "embedding": embedding})
-                # Clean up chunk file after embedding
+                store.add_chunk(chunk_id, embedding, {
+                    "source_file": abs_path,
+                    "start_time": chunk["start_time"],
+                    "end_time": chunk["end_time"],
+                })
+                file_new_chunks += 1
                 files_to_cleanup.append(chunk["chunk_path"])
 
-            # Clean up temporary chunk files
             for f in files_to_cleanup:
                 try:
                     os.unlink(f)
                 except OSError:
                     pass
 
-            # Clean up the temporary directory containing chunks
             if chunks:
                 tmp_dir = os.path.dirname(chunks[0]["chunk_path"])
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
-            if embedded:
-                store.add_chunks(embedded)
+            if file_new_chunks:
                 new_files += 1
-                new_chunks += len(embedded)
+                new_chunks += file_new_chunks
 
         stats = store.get_stats()
         skipped_msg = f" (skipped {skipped_chunks} still)" if skipped_chunks else ""
