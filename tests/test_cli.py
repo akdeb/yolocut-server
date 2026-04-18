@@ -261,6 +261,54 @@ class TestIndexCommand:
         mock_store.add_chunk.assert_not_called()
 
 
+    def test_index_retry_failed_reattempts_dlq_chunks(self, runner, tmp_path):
+        d = tmp_path / "vids"
+        d.mkdir()
+        source = d / "video.mp4"
+        source.write_bytes(b"fake")
+
+        chunk_dir = tmp_path / "chunks"
+        chunk_dir.mkdir()
+        chunk_path = chunk_dir / "chunk_000.mp4"
+        chunk_path.write_bytes(b"chunk")
+
+        mock_store = MagicMock()
+        mock_store.has_chunk.return_value = False
+        mock_store.make_chunk_id.return_value = "retry_id"
+        mock_store.get_stats.return_value = {
+            "total_chunks": 1, "unique_source_files": 1,
+        }
+        mock_embedder = MagicMock()
+        mock_embedder.embed_video_chunk.return_value = [0.1] * 768
+
+        from sentrysearch.dlq import DeadLetterQueue
+        dlq_instance = DeadLetterQueue(tmp_path / "dlq.json")
+        dlq_instance.record(
+            "retry_id", source_file=str(source.resolve()),
+            start_time=0.0, end_time=30.0, error="prior failure", attempts=1,
+        )
+
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.embedder.get_embedder", return_value=mock_embedder), \
+             patch("sentrysearch.dlq.DeadLetterQueue", return_value=dlq_instance), \
+             patch("sentrysearch.chunker.chunk_video", return_value=[{
+                 "chunk_path": str(chunk_path),
+                 "source_file": str(source.resolve()),
+                 "start_time": 0.0,
+                 "end_time": 30.0,
+             }]), \
+             patch("sentrysearch.chunker.is_still_frame_chunk", return_value=False):
+            result = runner.invoke(cli, [
+                "index", str(d), "--no-preprocess", "--retry-failed",
+            ])
+
+        assert result.exit_code == 0, result.output
+        mock_embedder.embed_video_chunk.assert_called_once()
+        mock_store.add_chunk.assert_called_once()
+        # Successful retry should remove the entry from the DLQ
+        assert not dlq_instance.contains("retry_id")
+
+
     def test_index_overlap_equal_chunk_duration_errors(self, runner, tmp_path):
         d = tmp_path / "vids"
         d.mkdir()
@@ -280,6 +328,46 @@ class TestIndexCommand:
         ])
         assert result.exit_code != 0
         assert "overlap" in result.output.lower()
+
+
+class TestDlqCommand:
+    def test_dlq_list_empty(self, runner, tmp_path):
+        from sentrysearch.dlq import DeadLetterQueue
+        empty = DeadLetterQueue(tmp_path / "dlq.json")
+        with patch("sentrysearch.dlq.DeadLetterQueue", return_value=empty):
+            result = runner.invoke(cli, ["dlq", "list"])
+        assert result.exit_code == 0
+        assert "empty" in result.output.lower()
+
+    def test_dlq_list_shows_entries(self, runner, tmp_path):
+        from sentrysearch.dlq import DeadLetterQueue
+        q = DeadLetterQueue(tmp_path / "dlq.json")
+        q.record(
+            "id1", source_file="/tmp/clip.mp4",
+            start_time=60.0, end_time=90.0,
+            error="cuda out of memory", attempts=2,
+        )
+        with patch("sentrysearch.dlq.DeadLetterQueue", return_value=q):
+            result = runner.invoke(cli, ["dlq", "list"])
+        assert result.exit_code == 0
+        assert "id1" in result.output
+        assert "clip.mp4" in result.output
+        assert "out of memory" in result.output
+        assert "01:00" in result.output and "01:30" in result.output
+
+    def test_dlq_clear(self, runner, tmp_path):
+        from sentrysearch.dlq import DeadLetterQueue
+        q = DeadLetterQueue(tmp_path / "dlq.json")
+        q.record(
+            "id1", source_file="/tmp/clip.mp4",
+            start_time=0.0, end_time=30.0,
+            error="oom", attempts=1,
+        )
+        with patch("sentrysearch.dlq.DeadLetterQueue", return_value=q):
+            result = runner.invoke(cli, ["dlq", "clear"], input="y\n")
+        assert result.exit_code == 0
+        assert "Cleared 1" in result.output
+        assert len(q) == 0
 
 
 class TestIndexLocalFlags:

@@ -308,9 +308,11 @@ def init():
                    "(default: auto-detect from hardware). Implies --backend local.")
 @click.option("--quantize/--no-quantize", default=None,
               help="Enable/disable 4-bit quantization for local backend (default: auto-detect).")
+@click.option("--retry-failed", is_flag=True,
+              help="Retry chunks that previously failed and were routed to the DLQ.")
 @click.option("--verbose", is_flag=True, help="Show debug info.")
 def index(directory, chunk_duration, overlap, preprocess, target_resolution,
-          target_fps, skip_still, backend, model, quantize, verbose):
+          target_fps, skip_still, backend, model, quantize, retry_failed, verbose):
     """Index supported video files in DIRECTORY for searching."""
     from .chunker import (
         SUPPORTED_VIDEO_EXTENSIONS,
@@ -397,12 +399,20 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
                     continue
 
                 if dlq.contains(chunk_id):
-                    click.echo(
-                        f"Skipping chunk {chunk_idx}/{num_chunks} (in DLQ — "
-                        f"use --retry-failed to re-attempt)"
-                    )
-                    files_to_cleanup.append(chunk["chunk_path"])
-                    continue
+                    if retry_failed:
+                        dlq.remove(chunk_id)
+                        if verbose:
+                            click.echo(
+                                f"  [verbose] retrying DLQ'd chunk {chunk_idx}/{num_chunks}",
+                                err=True,
+                            )
+                    else:
+                        click.echo(
+                            f"Skipping chunk {chunk_idx}/{num_chunks} (in DLQ — "
+                            f"use --retry-failed to re-attempt)"
+                        )
+                        files_to_cleanup.append(chunk["chunk_path"])
+                        continue
 
                 if skip_still and is_still_frame_chunk(
                     chunk["chunk_path"], verbose=verbose,
@@ -801,3 +811,53 @@ def remove(files, backend, model):
 
     if total_removed:
         click.echo(f"\nTotal: removed {total_removed} chunks.")
+
+
+# -----------------------------------------------------------------------
+# dlq
+# -----------------------------------------------------------------------
+
+@cli.group()
+def dlq():
+    """Inspect or clear the dead-letter queue of failed chunks."""
+
+
+@dlq.command("list")
+def dlq_list():
+    """Show chunks that failed to embed."""
+    from datetime import datetime
+
+    from .dlq import DeadLetterQueue
+
+    q = DeadLetterQueue()
+    entries = q.entries()
+    if not entries:
+        click.echo("DLQ is empty.")
+        return
+
+    click.echo(f"{len(entries)} chunk(s) in the DLQ:\n")
+    for chunk_id, info in sorted(
+        entries.items(), key=lambda kv: kv[1]["last_attempt"]
+    ):
+        ts = datetime.fromtimestamp(info["last_attempt"]).strftime("%Y-%m-%d %H:%M:%S")
+        basename = os.path.basename(info["source_file"])
+        click.echo(
+            f"  {chunk_id}  {basename} "
+            f"@ {_fmt_time(info['start_time'])}-{_fmt_time(info['end_time'])}  "
+            f"(attempts={info['attempts']}, last={ts})"
+        )
+        click.echo(f"    error: {info['error']}")
+    click.echo(
+        "\nRetry with: sentrysearch index <directory> --retry-failed"
+    )
+
+
+@dlq.command("clear")
+@click.confirmation_option(prompt="Clear all DLQ entries?")
+def dlq_clear():
+    """Remove all entries from the dead-letter queue."""
+    from .dlq import DeadLetterQueue
+
+    q = DeadLetterQueue()
+    count = q.clear()
+    click.echo(f"Cleared {count} DLQ entries.")
