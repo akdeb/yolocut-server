@@ -173,6 +173,94 @@ class TestIndexCommand:
         assert args[0] == "id2"
 
 
+    def test_index_records_failed_chunk_to_dlq(self, runner, tmp_path):
+        d = tmp_path / "vids"
+        d.mkdir()
+        source = d / "video.mp4"
+        source.write_bytes(b"fake")
+
+        chunk_dir = tmp_path / "chunks"
+        chunk_dir.mkdir()
+        chunk_path = chunk_dir / "chunk_000.mp4"
+        chunk_path.write_bytes(b"chunk")
+
+        mock_store = MagicMock()
+        mock_store.has_chunk.return_value = False
+        mock_store.make_chunk_id.return_value = "failing_id"
+        mock_store.get_stats.return_value = {
+            "total_chunks": 0, "unique_source_files": 0,
+        }
+        mock_embedder = MagicMock()
+        mock_embedder.embed_video_chunk.side_effect = RuntimeError(
+            "CUDA out of memory"
+        )
+
+        from sentrysearch.dlq import DeadLetterQueue
+        dlq_instance = DeadLetterQueue(tmp_path / "dlq.json")
+
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.embedder.get_embedder", return_value=mock_embedder), \
+             patch("sentrysearch.dlq.DeadLetterQueue", return_value=dlq_instance), \
+             patch("sentrysearch.chunker.chunk_video", return_value=[{
+                 "chunk_path": str(chunk_path),
+                 "source_file": str(source.resolve()),
+                 "start_time": 0.0,
+                 "end_time": 30.0,
+             }]), \
+             patch("sentrysearch.chunker.is_still_frame_chunk", return_value=False):
+            result = runner.invoke(cli, ["index", str(d), "--no-preprocess"])
+
+        assert result.exit_code == 0, result.output
+        # OOM is permanent — should DLQ on first attempt without retries
+        assert mock_embedder.embed_video_chunk.call_count == 1
+        mock_store.add_chunk.assert_not_called()
+        assert dlq_instance.contains("failing_id")
+        entry = dlq_instance.entries()["failing_id"]
+        assert "out of memory" in entry["error"].lower()
+
+    def test_index_skips_dlq_chunks_by_default(self, runner, tmp_path):
+        d = tmp_path / "vids"
+        d.mkdir()
+        source = d / "video.mp4"
+        source.write_bytes(b"fake")
+
+        chunk_dir = tmp_path / "chunks"
+        chunk_dir.mkdir()
+        chunk_path = chunk_dir / "chunk_000.mp4"
+        chunk_path.write_bytes(b"chunk")
+
+        mock_store = MagicMock()
+        mock_store.has_chunk.return_value = False
+        mock_store.make_chunk_id.return_value = "dlq_id"
+        mock_store.get_stats.return_value = {
+            "total_chunks": 0, "unique_source_files": 0,
+        }
+        mock_embedder = MagicMock()
+
+        from sentrysearch.dlq import DeadLetterQueue
+        dlq_instance = DeadLetterQueue(tmp_path / "dlq.json")
+        dlq_instance.record(
+            "dlq_id", source_file=str(source.resolve()),
+            start_time=0.0, end_time=30.0, error="prior OOM", attempts=1,
+        )
+
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.embedder.get_embedder", return_value=mock_embedder), \
+             patch("sentrysearch.dlq.DeadLetterQueue", return_value=dlq_instance), \
+             patch("sentrysearch.chunker.chunk_video", return_value=[{
+                 "chunk_path": str(chunk_path),
+                 "source_file": str(source.resolve()),
+                 "start_time": 0.0,
+                 "end_time": 30.0,
+             }]), \
+             patch("sentrysearch.chunker.is_still_frame_chunk", return_value=False):
+            result = runner.invoke(cli, ["index", str(d), "--no-preprocess"])
+
+        assert result.exit_code == 0
+        mock_embedder.embed_video_chunk.assert_not_called()
+        mock_store.add_chunk.assert_not_called()
+
+
     def test_index_overlap_equal_chunk_duration_errors(self, runner, tmp_path):
         d = tmp_path / "vids"
         d.mkdir()

@@ -41,6 +41,75 @@ def _overlay_output_path(path: str) -> str:
     return f"{base}_overlay.mp4"
 
 
+def _is_permanent_failure(exc: Exception) -> bool:
+    """Return True for errors that won't resolve by retrying the same chunk."""
+    msg = str(exc).lower()
+    if isinstance(exc, FileNotFoundError):
+        return True
+    # OOM — same chunk at same settings will OOM again
+    if "out of memory" in msg or "cuda out of memory" in msg:
+        return True
+    # Decoder failures on specific files
+    if "invalid data" in msg or "could not decode" in msg:
+        return True
+    return False
+
+
+def _embed_with_retry(
+    embedder,
+    embed_path: str,
+    chunk: dict,
+    dlq,
+    *,
+    max_attempts: int = 3,
+    verbose: bool = False,
+) -> list[float] | None:
+    """Embed a chunk with retries. On permanent/exhausted failure, record
+    to the DLQ and return None so the caller can continue.
+
+    Quota errors bubble up — the user needs to stop and wait.
+    """
+    import time as _time
+    from .gemini_embedder import GeminiAPIKeyError, GeminiQuotaError
+
+    chunk_id = chunk["chunk_id"]
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return embedder.embed_video_chunk(embed_path, verbose=verbose)
+        except (GeminiQuotaError, GeminiAPIKeyError):
+            raise  # user-facing, stop the run
+        except Exception as exc:
+            last_exc = exc
+            if _is_permanent_failure(exc) or attempt == max_attempts:
+                dlq.record(
+                    chunk_id,
+                    source_file=chunk["source_file"],
+                    start_time=chunk["start_time"],
+                    end_time=chunk["end_time"],
+                    error=repr(exc),
+                    attempts=attempt,
+                )
+                click.secho(
+                    f"  Failed after {attempt} attempt(s), recorded to DLQ: {exc}",
+                    fg="yellow",
+                    err=True,
+                )
+                return None
+            wait = 2 ** attempt
+            click.secho(
+                f"  Embed error (attempt {attempt}/{max_attempts}), "
+                f"retrying in {wait}s: {exc}",
+                fg="yellow",
+                err=True,
+            )
+            _time.sleep(wait)
+    # unreachable — loop always returns or records
+    if last_exc is not None:
+        raise last_exc
+    return None
+
+
 def _handle_error(e: Exception) -> None:
     """Print a user-friendly error and exit."""
     from .gemini_embedder import GeminiAPIKeyError, GeminiQuotaError
@@ -250,6 +319,7 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
         preprocess_chunk,
         scan_directory,
     )
+    from .dlq import DeadLetterQueue
     from .embedder import get_embedder, reset_embedder
     from .local_embedder import detect_default_model, normalize_model_key
     from .store import SentryStore
@@ -289,10 +359,12 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
             return
 
         store = SentryStore(backend=backend, model=model)
+        dlq = DeadLetterQueue()
         total_files = len(videos)
         new_files = 0
         new_chunks = 0
         skipped_chunks = 0
+        dlq_chunks = 0
 
         if verbose:
             click.echo(f"[verbose] DB path: {store._client._identifier}", err=True)
@@ -321,6 +393,14 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
                             f"  [verbose] chunk {chunk_idx}/{num_chunks} already indexed — resuming",
                             err=True,
                         )
+                    files_to_cleanup.append(chunk["chunk_path"])
+                    continue
+
+                if dlq.contains(chunk_id):
+                    click.echo(
+                        f"Skipping chunk {chunk_idx}/{num_chunks} (in DLQ — "
+                        f"use --retry-failed to re-attempt)"
+                    )
                     files_to_cleanup.append(chunk["chunk_path"])
                     continue
 
@@ -358,14 +438,26 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
                     if embed_path != chunk["chunk_path"]:
                         files_to_cleanup.append(embed_path)
 
-                embedding = embedder.embed_video_chunk(embed_path, verbose=verbose)
+                embedding = _embed_with_retry(
+                    embedder, embed_path,
+                    {
+                        "chunk_id": chunk_id,
+                        "source_file": abs_path,
+                        "start_time": chunk["start_time"],
+                        "end_time": chunk["end_time"],
+                    },
+                    dlq, verbose=verbose,
+                )
+                files_to_cleanup.append(chunk["chunk_path"])
+                if embedding is None:
+                    dlq_chunks += 1
+                    continue
                 store.add_chunk(chunk_id, embedding, {
                     "source_file": abs_path,
                     "start_time": chunk["start_time"],
                     "end_time": chunk["end_time"],
                 })
                 file_new_chunks += 1
-                files_to_cleanup.append(chunk["chunk_path"])
 
             for f in files_to_cleanup:
                 try:
@@ -382,12 +474,23 @@ def index(directory, chunk_duration, overlap, preprocess, target_resolution,
                 new_chunks += file_new_chunks
 
         stats = store.get_stats()
-        skipped_msg = f" (skipped {skipped_chunks} still)" if skipped_chunks else ""
+        parts = []
+        if skipped_chunks:
+            parts.append(f"skipped {skipped_chunks} still")
+        if dlq_chunks:
+            parts.append(f"{dlq_chunks} failed → DLQ")
+        extra = f" ({', '.join(parts)})" if parts else ""
         click.echo(
-            f"\nIndexed {new_chunks} new chunks from {new_files} files{skipped_msg}. "
+            f"\nIndexed {new_chunks} new chunks from {new_files} files{extra}. "
             f"Total: {stats['total_chunks']} chunks from "
             f"{stats['unique_source_files']} files."
         )
+        if dlq_chunks:
+            click.secho(
+                f"See `sentrysearch dlq list` for details. "
+                f"Retry with `sentrysearch index <dir> --retry-failed`.",
+                fg="yellow",
+            )
 
     except Exception as e:
         _handle_error(e)
