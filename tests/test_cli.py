@@ -354,6 +354,134 @@ class TestIndexCommand:
         assert "overlap" in result.output.lower()
 
 
+class TestShellCommand:
+    @pytest.fixture(autouse=True)
+    def _isolate_history(self, tmp_path):
+        """Redirect shell history to tmp_path so tests don't touch real home."""
+        with patch("sentrysearch.cli._HISTORY_PATH",
+                   str(tmp_path / "history")):
+            yield
+
+    def _setup_mocks(self, runner, input_lines, total_chunks=5, search_results=None):
+        mock_store = MagicMock()
+        mock_store.get_stats.return_value = {
+            "total_chunks": total_chunks, "unique_source_files": 1,
+        }
+        mock_embedder = MagicMock()
+        results_side_effect = search_results if search_results is not None else [[]]
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.store.detect_index", return_value=(None, None)), \
+             patch("sentrysearch.embedder.get_embedder", return_value=mock_embedder) as mock_get, \
+             patch("sentrysearch.search.search_footage", side_effect=results_side_effect) as mock_search:
+            result = runner.invoke(cli, ["shell"], input=input_lines)
+        return result, mock_get, mock_search, mock_store
+
+    def test_shell_empty_index(self, runner):
+        mock_store = MagicMock()
+        mock_store.get_stats.return_value = {
+            "total_chunks": 0, "unique_source_files": 0,
+        }
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.store.detect_index", return_value=(None, None)), \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()):
+            result = runner.invoke(cli, ["shell"])
+        assert result.exit_code == 0
+        assert "No indexed footage" in result.output
+
+    def test_shell_loads_embedder_once(self, runner):
+        fake_results = [
+            {"source_file": "/v.mp4", "start_time": 0.0, "end_time": 30.0,
+             "similarity_score": 0.8},
+        ]
+        result, mock_get, mock_search, _ = self._setup_mocks(
+            runner,
+            input_lines="car\nperson\n:quit\n",
+            search_results=[fake_results, fake_results],
+        )
+        assert result.exit_code == 0, result.output
+        # Model loaded exactly once despite multiple queries
+        assert mock_get.call_count == 1
+        assert mock_search.call_count == 2
+        assert "#1 [0.80]" in result.output
+
+    def test_shell_quit_command(self, runner):
+        result, _, mock_search, _ = self._setup_mocks(
+            runner, input_lines=":quit\n",
+        )
+        assert result.exit_code == 0
+        mock_search.assert_not_called()
+
+    def test_shell_n_command_updates_result_count(self, runner):
+        result, _, mock_search, _ = self._setup_mocks(
+            runner,
+            input_lines=":n 10\ncar\n:quit\n",
+            search_results=[[]],
+        )
+        assert result.exit_code == 0
+        assert "n_results = 10" in result.output
+        # The one actual query should have used n_results=10
+        assert mock_search.call_args.kwargs["n_results"] == 10
+
+    def test_shell_n_command_rejects_bad_input(self, runner):
+        result, _, _, _ = self._setup_mocks(
+            runner, input_lines=":n abc\n:quit\n",
+        )
+        assert result.exit_code == 0
+        assert "usage: :n" in result.output
+
+    def test_shell_unknown_command(self, runner):
+        result, _, mock_search, _ = self._setup_mocks(
+            runner, input_lines=":bogus\n:quit\n",
+        )
+        assert result.exit_code == 0
+        assert "unknown command" in result.output
+        mock_search.assert_not_called()
+
+    def test_shell_eof_exits_cleanly(self, runner):
+        result, _, _, _ = self._setup_mocks(
+            runner, input_lines="",  # no input -> immediate EOF
+        )
+        assert result.exit_code == 0
+
+    def test_shell_empty_results(self, runner):
+        result, _, _, _ = self._setup_mocks(
+            runner,
+            input_lines="ghost\n:quit\n",
+            search_results=[[]],
+        )
+        assert result.exit_code == 0
+        assert "(no results)" in result.output
+
+    def test_shell_low_confidence_warning(self, runner):
+        low_conf = [
+            {"source_file": "/v.mp4", "start_time": 0.0, "end_time": 30.0,
+             "similarity_score": 0.10},
+        ]
+        result, _, _, _ = self._setup_mocks(
+            runner,
+            input_lines="obscure query\n:quit\n",
+            search_results=[low_conf],
+        )
+        assert result.exit_code == 0
+        assert "low confidence" in result.output
+
+    def test_shell_search_error_kept_alive(self, runner):
+        """A query failure should print the error but not kill the REPL."""
+        mock_store = MagicMock()
+        mock_store.get_stats.return_value = {
+            "total_chunks": 5, "unique_source_files": 1,
+        }
+        with patch("sentrysearch.store.SentryStore", return_value=mock_store), \
+             patch("sentrysearch.store.detect_index", return_value=(None, None)), \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.search.search_footage",
+                   side_effect=[RuntimeError("boom"), []]) as mock_search:
+            result = runner.invoke(cli, ["shell"], input="a\nb\n:quit\n")
+        assert result.exit_code == 0
+        assert "Error: boom" in result.output
+        assert mock_search.call_count == 2  # REPL survived first failure
+
+
 class TestDlqCommand:
     def test_dlq_list_empty(self, runner, tmp_path):
         from sentrysearch.dlq import DeadLetterQueue
@@ -472,6 +600,33 @@ class TestIndexLocalFlags:
             MockStore.return_value = mock_inst
             runner.invoke(cli, ["index", str(d), "--backend", "local"])
             MockStore.assert_called_once_with(backend="local", model="qwen8b")
+
+
+class TestSearchShellTip:
+    def test_tip_shown_for_local_backend(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, [
+                "search", "test", "--backend", "local", "--model", "qwen2b",
+            ])
+        assert result.exit_code == 0
+        assert "shell" in result.output and "keeps the model loaded" in result.output
+
+    def test_tip_not_shown_for_gemini_backend(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["search", "test"])
+        assert result.exit_code == 0
+        assert "keeps the model loaded" not in result.output
 
 
 class TestSearchLocalFlags:
