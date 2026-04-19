@@ -689,6 +689,161 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
 
 
 # -----------------------------------------------------------------------
+# shell
+# -----------------------------------------------------------------------
+
+_HISTORY_PATH = os.path.join(os.path.expanduser("~"), ".sentrysearch", "history")
+
+
+def _print_shell_results(results, threshold):
+    if not results:
+        click.echo("  (no results)")
+        return
+    best = results[0]["similarity_score"]
+    if best < threshold:
+        click.secho(f"  (low confidence — best score: {best:.2f})", fg="yellow")
+    for i, r in enumerate(results, 1):
+        basename = os.path.basename(r["source_file"])
+        click.echo(
+            f"  #{i} [{r['similarity_score']:.2f}] {basename} "
+            f"@ {_fmt_time(r['start_time'])}-{_fmt_time(r['end_time'])}"
+        )
+
+
+@cli.command()
+@click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
+              help="Embedding backend (auto-detected from index if omitted).")
+@click.option("--model", default=None,
+              help="Model for local backend (default: auto-detect from index).")
+@click.option("--quantize/--no-quantize", default=None,
+              help="Enable/disable 4-bit quantization for local backend.")
+@click.option("-n", "--results", "n_results", default=5, show_default=True,
+              help="Number of results per query.")
+@click.option("--threshold", default=0.41, show_default=True, type=float,
+              help="Minimum similarity score to consider a confident match.")
+@click.option("--verbose", is_flag=True, help="Show debug info.")
+def shell(backend, model, quantize, n_results, threshold, verbose):
+    """Start an interactive search session that keeps the model loaded.
+
+    Useful for running multiple queries back-to-back with the local
+    backend, which otherwise re-loads the model on every `search`
+    invocation.
+
+    Meta-commands:
+      :n <int>   change number of results
+      :help      show help
+      :quit      exit (Ctrl-D also works)
+    """
+    from .embedder import get_embedder, reset_embedder
+    from .local_embedder import normalize_model_key
+    from .search import search_footage
+    from .store import SentryStore, detect_index
+
+    try:
+        # Resolve backend/model (mirrors `search`)
+        if model is not None and backend is None:
+            backend = "local"
+        if model is not None:
+            model = normalize_model_key(model)
+        if backend is None:
+            detected_backend, detected_model = detect_index()
+            backend = detected_backend or "gemini"
+            if model is None:
+                model = detected_model
+        elif backend == "local" and model is None:
+            _, model = detect_index()
+
+        store = SentryStore(backend=backend, model=model)
+        stats = store.get_stats()
+        if stats["total_chunks"] == 0:
+            click.echo("No indexed footage. Run `sentrysearch index <dir>` first.")
+            return
+
+        label = backend + (f" ({model})" if model else "")
+        click.echo(f"Loading {label}...")
+        get_embedder(backend, model=model, quantize=quantize)
+
+        # Readline for arrow-key history and persistent history file
+        try:
+            import readline
+            os.makedirs(os.path.dirname(_HISTORY_PATH), exist_ok=True)
+            if os.path.exists(_HISTORY_PATH):
+                try:
+                    readline.read_history_file(_HISTORY_PATH)
+                except OSError:
+                    pass
+            readline.set_history_length(1000)
+        except ImportError:
+            readline = None
+
+        click.secho(
+            f"Ready. {stats['total_chunks']} chunks indexed. "
+            "Type a query, :help for commands, :quit to exit.",
+            fg="green",
+        )
+
+        while True:
+            try:
+                query = input("search> ").strip()
+            except EOFError:
+                click.echo()
+                break
+            except KeyboardInterrupt:
+                click.echo()
+                continue
+            if not query:
+                continue
+
+            if query.startswith(":"):
+                cmd, _, arg = query[1:].partition(" ")
+                cmd = cmd.strip().lower()
+                arg = arg.strip()
+                if cmd in ("q", "quit", "exit"):
+                    break
+                if cmd == "help":
+                    click.echo(
+                        ":n <int>   set result count (current: "
+                        f"{n_results})\n"
+                        ":help      show this help\n"
+                        ":quit      exit"
+                    )
+                    continue
+                if cmd == "n":
+                    try:
+                        new_n = int(arg)
+                        if new_n < 1:
+                            raise ValueError
+                        n_results = new_n
+                        click.echo(f"n_results = {n_results}")
+                    except ValueError:
+                        click.secho("usage: :n <positive int>", fg="yellow")
+                    continue
+                click.secho(f"unknown command: :{cmd}", fg="yellow")
+                continue
+
+            try:
+                results = search_footage(
+                    query, store, n_results=n_results, verbose=verbose,
+                )
+            except Exception as e:
+                click.secho(f"Error: {e}", fg="red")
+                continue
+
+            _print_shell_results(results, threshold)
+
+        if readline is not None:
+            try:
+                readline.write_history_file(_HISTORY_PATH)
+            except OSError:
+                pass
+
+    except Exception as e:
+        _handle_error(e)
+    finally:
+        reset_embedder()
+
+
+# -----------------------------------------------------------------------
 # overlay
 # -----------------------------------------------------------------------
 
