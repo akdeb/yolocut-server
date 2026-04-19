@@ -609,6 +609,12 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
                 )
             return
 
+        if backend == "local":
+            click.secho(
+                "Tip: `sentrysearch shell` keeps the model loaded across queries.",
+                fg="yellow", err=True,
+            )
+
         get_embedder(backend, model=model, quantize=quantize)
 
         # Ensure we fetch enough results for --save-top

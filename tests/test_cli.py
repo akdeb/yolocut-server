@@ -602,6 +602,33 @@ class TestIndexLocalFlags:
             MockStore.assert_called_once_with(backend="local", model="qwen8b")
 
 
+class TestSearchShellTip:
+    def test_tip_shown_for_local_backend(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, [
+                "search", "test", "--backend", "local", "--model", "qwen2b",
+            ])
+        assert result.exit_code == 0
+        assert "shell" in result.output and "keeps the model loaded" in result.output
+
+    def test_tip_not_shown_for_gemini_backend(self, runner):
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.search.search_footage", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["search", "test"])
+        assert result.exit_code == 0
+        assert "keeps the model loaded" not in result.output
+
+
 class TestSearchLocalFlags:
     def test_search_passes_model_to_embedder(self, runner):
         with patch("sentrysearch.store.SentryStore") as MockStore, \
