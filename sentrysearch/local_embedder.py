@@ -405,5 +405,80 @@ class LocalEmbedder(BaseEmbedder):
 
         return result
 
+    def embed_image(self, image_path: str, verbose: bool = False) -> list[float]:
+        self._load_model()
+
+        import torch
+        import torch.nn.functional as F
+        from pathlib import Path
+
+        from qwen_vl_utils import process_vision_info
+
+        image_path = Path(image_path)
+        if not image_path.exists():
+            raise LocalModelError(f"Image file not found: {image_path}")
+
+        t0 = time.monotonic()
+
+        conversation = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Retrieve videos relevant to the query."}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": "file://" + str(image_path.resolve())},
+                ],
+            },
+        ]
+
+        text = self._processor.apply_chat_template(
+            conversation, tokenize=False, add_generation_prompt=True,
+        )
+
+        images, video_inputs, video_kwargs = process_vision_info(
+            conversation,
+            return_video_metadata=True,
+            return_video_kwargs=True,
+        )
+
+        if video_inputs is not None:
+            videos, video_metadata = zip(*video_inputs)
+            videos = list(videos)
+            video_metadata = list(video_metadata)
+        else:
+            videos, video_metadata = None, None
+
+        inputs = self._processor(
+            text=[text],
+            images=images,
+            videos=videos,
+            video_metadata=video_metadata,
+            return_tensors="pt",
+            padding=True,
+            **video_kwargs,
+        )
+        inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = self._model(**inputs)
+            embeddings = self._pooling_last(
+                outputs.last_hidden_state, inputs["attention_mask"],
+            )
+            embeddings = F.normalize(embeddings, p=2, dim=-1)
+
+        result = self._truncate_and_normalize(embeddings[0], self._dimensions)
+        elapsed = time.monotonic() - t0
+
+        if verbose:
+            print(
+                f"  [verbose] image embedding: dims={len(result)}, "
+                f"inference_time={elapsed:.2f}s",
+                file=sys.stderr,
+            )
+
+        return result
+
     def dimensions(self) -> int:
         return self._dimensions

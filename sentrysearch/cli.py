@@ -625,68 +625,140 @@ def search(query, n_results, output_dir, trim, save_top, threshold, overlay, bac
             click.echo(f"  [verbose] backend={backend}, similarity threshold: {threshold}", err=True)
 
         results = search_footage(query, store, n_results=n_results, verbose=verbose)
+        _present_results(results, threshold, trim, save_top, output_dir, overlay, verbose)
 
-        if not results:
+    except Exception as e:
+        _handle_error(e)
+    finally:
+        reset_embedder()
+
+
+def _present_results(results, threshold, trim, save_top, output_dir, overlay, verbose):
+    if not results:
+        click.echo(
+            "No results found.\n\n"
+            "Suggestions:\n"
+            "  - Try a broader or different query\n"
+            "  - Re-index with smaller --chunk-duration for finer granularity\n"
+            "  - Check `sentrysearch stats` to see what's indexed"
+        )
+        return
+
+    best_score = results[0]["similarity_score"]
+    low_confidence = best_score < threshold
+
+    if low_confidence and not trim:
+        click.secho(
+            f"(low confidence — best score: {best_score:.2f})",
+            fg="yellow",
+            err=True,
+        )
+
+    for i, r in enumerate(results, 1):
+        basename = os.path.basename(r["source_file"])
+        start_str = _fmt_time(r["start_time"])
+        end_str = _fmt_time(r["end_time"])
+        score = r["similarity_score"]
+        if verbose:
+            click.echo(f"  #{i} [{score:.6f}] {basename} @ {start_str}-{end_str}")
+        else:
+            click.echo(f"  #{i} [{score:.2f}] {basename} @ {start_str}-{end_str}")
+
+    should_trim = trim or save_top is not None
+    if should_trim:
+        if low_confidence:
+            if not click.confirm(
+                f"No confident match found (best score: {best_score:.2f}). "
+                "Show results anyway?",
+                default=False,
+            ):
+                return
+
+        from .trimmer import trim_top_results
+        count = save_top if save_top is not None else 1
+        clip_paths = trim_top_results(results, output_dir, count=count)
+
+        for i, clip_path in enumerate(clip_paths):
+            if overlay:
+                r = results[i]
+                _apply_overlay_to_clip(
+                    clip_path, r["source_file"],
+                    r["start_time"], r["end_time"],
+                )
+            click.echo(f"\nSaved clip: {clip_path}")
+
+        if clip_paths:
+            _open_file(clip_paths[0])
+
+
+@cli.command()
+@click.argument("image", type=click.Path(exists=True, dir_okay=False))
+@click.option("-n", "--results", "n_results", default=5, show_default=True,
+              help="Number of results to return.")
+@click.option("-o", "--output-dir", default="~/sentrysearch_clips", show_default=True,
+              help="Directory to save trimmed clips.")
+@click.option("--trim/--no-trim", default=True, show_default=True,
+              help="Trim and save the top result as a clip.")
+@click.option("--save-top", default=None, type=click.IntRange(min=1),
+              help="Save the top N matches as separate clips.")
+@click.option("--threshold", default=0.41, show_default=True, type=float,
+              help="Minimum similarity score to consider a confident match.")
+@click.option("--overlay/--no-overlay", default=False, show_default=True,
+              help="Apply Tesla telemetry overlay to saved clips.")
+@click.option("--backend", type=click.Choice(["gemini", "local"]), default=None,
+              help="Embedding backend (auto-detected from index if omitted).")
+@click.option("--model", default=None,
+              help="Model for local backend (default: auto-detect from index).")
+@click.option("--quantize/--no-quantize", default=None,
+              help="Enable/disable 4-bit quantization for local backend.")
+@click.option("--verbose", is_flag=True, help="Show debug info.")
+def img(image, n_results, output_dir, trim, save_top, threshold, overlay,
+        backend, model, quantize, verbose):
+    """Search indexed footage using an IMAGE as the query."""
+    from .embedder import get_embedder, reset_embedder
+    from .local_embedder import normalize_model_key
+    from .search import search_footage_by_image
+    from .store import SentryStore, detect_index
+
+    output_dir = os.path.expanduser(output_dir)
+
+    try:
+        if model is not None and backend is None:
+            backend = "local"
+        if model is not None:
+            model = normalize_model_key(model)
+        if backend is None:
+            detected_backend, detected_model = detect_index()
+            backend = detected_backend or "gemini"
+            if model is None:
+                model = detected_model
+        elif backend == "local" and model is None:
+            _, model = detect_index()
+
+        store = SentryStore(backend=backend, model=model)
+
+        if store.get_stats()["total_chunks"] == 0:
             click.echo(
-                "No results found.\n\n"
-                "Suggestions:\n"
-                "  - Try a broader or different query\n"
-                "  - Re-index with smaller --chunk-duration for finer granularity\n"
-                "  - Check `sentrysearch stats` to see what's indexed"
+                "No indexed footage found. "
+                "Run `sentrysearch index <directory>` first."
             )
             return
 
-        best_score = results[0]["similarity_score"]
-        low_confidence = best_score < threshold
+        get_embedder(backend, model=model, quantize=quantize)
 
-        if low_confidence and not trim:
-            click.secho(
-                f"(low confidence — best score: {best_score:.2f})",
-                fg="yellow",
-                err=True,
+        if save_top is not None and save_top > n_results:
+            n_results = save_top
+
+        if verbose:
+            click.echo(
+                f"  [verbose] backend={backend}, image={image}, "
+                f"similarity threshold: {threshold}", err=True,
             )
 
-        for i, r in enumerate(results, 1):
-            basename = os.path.basename(r["source_file"])
-            start_str = _fmt_time(r["start_time"])
-            end_str = _fmt_time(r["end_time"])
-            score = r["similarity_score"]
-            if verbose:
-                click.echo(
-                    f"  #{i} [{score:.6f}] {basename} "
-                    f"@ {start_str}-{end_str}"
-                )
-            else:
-                click.echo(
-                    f"  #{i} [{score:.2f}] {basename} "
-                    f"@ {start_str}-{end_str}"
-                )
-
-        should_trim = trim or save_top is not None
-        if should_trim:
-            if low_confidence:
-                if not click.confirm(
-                    f"No confident match found (best score: {best_score:.2f}). "
-                    "Show results anyway?",
-                    default=False,
-                ):
-                    return
-
-            from .trimmer import trim_top_results
-            count = save_top if save_top is not None else 1
-            clip_paths = trim_top_results(results, output_dir, count=count)
-
-            for i, clip_path in enumerate(clip_paths):
-                if overlay:
-                    r = results[i]
-                    _apply_overlay_to_clip(
-                        clip_path, r["source_file"],
-                        r["start_time"], r["end_time"],
-                    )
-                click.echo(f"\nSaved clip: {clip_path}")
-
-            if clip_paths:
-                _open_file(clip_paths[0])
+        results = search_footage_by_image(
+            image, store, n_results=n_results, verbose=verbose,
+        )
+        _present_results(results, threshold, trim, save_top, output_dir, overlay, verbose)
 
     except Exception as e:
         _handle_error(e)

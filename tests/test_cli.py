@@ -721,6 +721,59 @@ class TestSearchLocalFlags:
         assert result.exit_code != 0
 
 
+class TestImgCommand:
+    def test_img_empty_index(self, runner, tmp_path):
+        img_path = tmp_path / "q.jpg"
+        img_path.write_bytes(b"\xff\xd8\xff\xe0")
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=(None, None)):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 0}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["img", str(img_path)])
+        assert result.exit_code == 0
+        assert "No indexed footage" in result.output
+
+    def test_img_calls_search_by_image(self, runner, tmp_path):
+        img_path = tmp_path / "q.jpg"
+        img_path.write_bytes(b"\xff\xd8\xff\xe0")
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.search.search_footage_by_image", return_value=[
+                 {"source_file": "/a.mp4", "start_time": 0.0, "end_time": 30.0,
+                  "similarity_score": 0.85},
+             ]) as mock_search:
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["img", str(img_path), "--no-trim"])
+        assert result.exit_code == 0, result.output
+        mock_search.assert_called_once()
+        assert "0.85" in result.output
+        assert "a.mp4" in result.output
+
+    def test_img_passes_model_to_embedder(self, runner, tmp_path):
+        img_path = tmp_path / "q.jpg"
+        img_path.write_bytes(b"\xff\xd8\xff\xe0")
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()) as mock_get, \
+             patch("sentrysearch.search.search_footage_by_image", return_value=[]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, [
+                "img", str(img_path), "--backend", "local", "--model", "qwen2b",
+                "--no-trim",
+            ])
+        assert result.exit_code == 0, result.output
+        mock_get.assert_called_with("local", model="qwen2b", quantize=None)
+
+    def test_img_missing_file_errors(self, runner):
+        result = runner.invoke(cli, ["img", "/nonexistent/x.jpg"])
+        assert result.exit_code != 0
+
+
 class TestHandleError:
     def test_local_model_error(self, runner):
         from sentrysearch.local_embedder import LocalModelError

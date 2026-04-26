@@ -177,6 +177,58 @@ class GeminiEmbedder(BaseEmbedder):
 
         return embedding
 
+    def embed_image(self, image_path: str, verbose: bool = False) -> list[float]:
+        from google.genai import types
+
+        if not os.path.isfile(image_path):
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        ext = os.path.splitext(image_path)[1].lower()
+        mime_map = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".heic": "image/heic", ".heif": "image/heif",
+        }
+        if ext not in mime_map:
+            raise ValueError(
+                f"Unsupported image type {ext!r}. "
+                f"Gemini accepts: {', '.join(sorted(mime_map))}."
+            )
+        mime = mime_map[ext]
+
+        with open(image_path, "rb") as f:
+            img_bytes = f.read()
+        if hasattr(types.Part, "from_bytes"):
+            part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+        else:
+            part = types.Part(inline_data=types.Blob(data=img_bytes, mime_type=mime))
+
+        self._limiter.wait()
+        t0 = time.monotonic()
+        response = _retry(
+            lambda: self._client.models.embed_content(
+                model=EMBED_MODEL,
+                contents=types.Content(parts=[part]),
+                config=types.EmbedContentConfig(
+                    task_type="RETRIEVAL_QUERY",
+                    output_dimensionality=DIMENSIONS,
+                ),
+            )
+        )
+        elapsed = time.monotonic() - t0
+        embedding = response.embeddings[0].values
+
+        if verbose:
+            size_kb = len(img_bytes) / 1024
+            print(
+                f"  [verbose] image embedding: dims={len(embedding)}, "
+                f"size={size_kb:.0f}KB, api_time={elapsed:.2f}s",
+                file=sys.stderr,
+            )
+
+        return embedding
+
     def dimensions(self) -> int:
         return DIMENSIONS
 
