@@ -12,3 +12,5 @@ notebooks/
 htmlcov/
 coverage.xml
 .coverage
+
+CLAUDE.md
