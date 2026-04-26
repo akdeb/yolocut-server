@@ -42,3 +42,7 @@ def embed_video_chunk(chunk_path: str, verbose: bool = False) -> list[float]:
 
 def embed_query(query_text: str, verbose: bool = False) -> list[float]:
     return get_embedder().embed_query(query_text, verbose=verbose)
+
+
+def embed_image(image_path: str, verbose: bool = False) -> list[float]:
+    return get_embedder().embed_image(image_path, verbose=verbose)

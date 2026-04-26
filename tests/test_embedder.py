@@ -14,6 +14,7 @@ from sentrysearch.gemini_embedder import (
     _retry,
 )
 from sentrysearch.embedder import (
+    embed_image,
     embed_query,
     embed_video_chunk,
     get_embedder,
@@ -165,6 +166,32 @@ class TestEmbedderFactory:
             result = embed_video_chunk(tiny_video)
             assert result == fake_values
             assert len(result) == 768
+
+    @patch("google.genai.Client")
+    def test_embed_image_delegates(self, mock_client_cls, tmp_path):
+        img_path = tmp_path / "q.jpg"
+        img_path.write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+        fake_values = [0.3] * 768
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.embeddings = [MagicMock(values=fake_values)]
+        mock_client.models.embed_content.return_value = mock_response
+        mock_client_cls.return_value = mock_client
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            result = embed_image(str(img_path))
+            assert result == fake_values
+            # Confirm RETRIEVAL_QUERY task type used (same space as text queries)
+            call = mock_client.models.embed_content.call_args
+            assert call.kwargs["config"].task_type == "RETRIEVAL_QUERY"
+
+    def test_embed_image_missing_file_raises(self):
+        with patch("google.genai.Client"), \
+             patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            reset_embedder()
+            with pytest.raises(FileNotFoundError):
+                embed_image("/nonexistent/x.jpg")
 
     @patch("google.genai.Client")
     def test_get_embedder_caches_instance(self, mock_client_cls):

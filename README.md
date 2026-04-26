@@ -2,13 +2,13 @@
 
 Semantic search over video footage. Type what you're looking for, get a trimmed clip back.
 
-[OpenClaw Skill](https://clawhub.ai/ssrajadh/natural-language-video-search)
+**New:** [Search by image](#search-by-image)
 
 [<video src="https://github.com/ssrajadh/sentrysearch/raw/main/docs/demo.mp4" controls width="100%"></video>](https://github.com/user-attachments/assets/baf98fad-080b-48e1-97f5-a2db2cbd53f5)
 
 ## How it works
 
-SentrySearch splits your videos into overlapping chunks, embeds each chunk as video using either Google's Gemini Embedding API or a local Qwen3-VL model, and stores the vectors in a local ChromaDB database. When you search, your text query is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
+SentrySearch splits your videos into overlapping chunks, embeds each chunk as video using either Google's Gemini Embedding API or a local Qwen3-VL model, and stores the vectors in a local ChromaDB database. When you search, your text query (or image — see [search by image](#search-by-image)) is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
 
 ## Getting Started
 
@@ -112,6 +112,25 @@ No confident match found (best score: 0.28). Show results anyway? [y/N]:
 With `--no-trim`, low-confidence results are shown with a note instead of a prompt.
 
 Options: `--results N`, `--output-dir DIR`, `--no-trim` to skip auto-trimming, `--threshold 0.5` to adjust the confidence cutoff, `--save-top N` to save the top N clips instead of just the best match. Backend and model are auto-detected from the index — pass `--backend` or `--model` only to override.
+
+### Search by image
+
+Use a reference image as the query — useful for "find clips that look like this" when describing the scene in words is awkward (a screenshot of a specific car, a reference frame from another video, etc.).
+
+```bash
+$ sentrysearch img ~/Downloads/image.jpg
+  #1 [0.72] 2026-03-12_10-44-17-left_repeater.mp4 @ 00:00-00:30
+  #2 [0.69] 2026-03-12_10-44-17-left_repeater.mp4 @ 00:25-00:55
+  #3 [0.67] 2026-02-12_20-02-15-front.mp4 @ 00:00-00:18
+
+Saved clip: ./match_2026-03-12_10-44-17-left_repeater_00m00s-00m30s.mp4
+```
+
+The image is embedded into the same vector space as the indexed video chunks and ranked by cosine similarity. All `search` flags are supported (`--results`, `--threshold`, `--save-top`, `--overlay`, `--no-trim`, `--backend`, `--model`).
+
+Supported formats: JPG, PNG, WEBP, GIF, HEIC/HEIF on the Gemini backend; the local backend additionally accepts anything PIL can decode (BMP, TIFF, etc.).
+
+> **Note:** Image search returns *visually similar* matches, not necessarily the same object. A red sedan query may surface other red sedans of similar shape — calibrate expectations accordingly.
 
 ### Local Backend (no API key needed)
 
