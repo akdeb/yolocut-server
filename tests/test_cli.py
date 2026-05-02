@@ -721,6 +721,136 @@ class TestSearchLocalFlags:
         assert result.exit_code != 0
 
 
+class TestLastClipCache:
+    @pytest.fixture(autouse=True)
+    def _isolated_cache(self, tmp_path, monkeypatch):
+        cache_root = tmp_path / "cache"
+        monkeypatch.setattr(
+            "sentrysearch._toolkit_cache.user_cache_dir",
+            lambda *a, **kw: str(cache_root),
+        )
+        return cache_root / "last_clip.json"
+
+    def _read_cache(self, cache_file):
+        import json
+        return json.loads(cache_file.read_text())
+
+    def test_search_save_top_1_writes_cache(self, runner, _isolated_cache):
+        results = [
+            {"source_file": "/a.mp4", "start_time": 0.0, "end_time": 30.0,
+             "similarity_score": 0.9},
+        ]
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.search.search_footage", return_value=results), \
+             patch("sentrysearch.trimmer.trim_top_results",
+                   return_value=["/tmp/clip1.mp4"]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["search", "test", "--save-top", "1"])
+
+        assert result.exit_code == 0, result.output
+        assert _isolated_cache.is_file()
+        data = self._read_cache(_isolated_cache)
+        assert data["path"] == "/tmp/clip1.mp4"
+        assert data["saved_by"] == "sentrysearch"
+        assert "Saved clip path cached for sentryblur" in result.output
+
+    def test_search_save_top_3_caches_rank_1(self, runner, _isolated_cache):
+        results = [
+            {"source_file": "/a.mp4", "start_time": 0.0, "end_time": 30.0, "similarity_score": 0.9},
+            {"source_file": "/a.mp4", "start_time": 30.0, "end_time": 60.0, "similarity_score": 0.8},
+            {"source_file": "/a.mp4", "start_time": 60.0, "end_time": 90.0, "similarity_score": 0.7},
+        ]
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.search.search_footage", return_value=results), \
+             patch("sentrysearch.trimmer.trim_top_results",
+                   return_value=["/tmp/rank1.mp4", "/tmp/rank2.mp4", "/tmp/rank3.mp4"]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["search", "test", "--save-top", "3"])
+
+        assert result.exit_code == 0, result.output
+        data = self._read_cache(_isolated_cache)
+        assert data["path"] == "/tmp/rank1.mp4"
+
+    def test_img_save_top_writes_cache(self, runner, tmp_path, _isolated_cache):
+        img_path = tmp_path / "q.jpg"
+        img_path.write_bytes(b"\xff\xd8\xff\xe0")
+        results = [
+            {"source_file": "/a.mp4", "start_time": 0.0, "end_time": 30.0,
+             "similarity_score": 0.9},
+        ]
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.search.search_footage_by_image", return_value=results), \
+             patch("sentrysearch.trimmer.trim_top_results",
+                   return_value=["/tmp/img_clip.mp4"]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["img", str(img_path), "--save-top", "1"])
+
+        assert result.exit_code == 0, result.output
+        data = self._read_cache(_isolated_cache)
+        assert data["path"] == "/tmp/img_clip.mp4"
+
+    def test_overlay_writes_cache(self, runner, tmp_path, _isolated_cache):
+        video = tmp_path / "in.mp4"
+        video.write_bytes(b"fake")
+        out = tmp_path / "out.mp4"
+
+        with patch("sentrysearch.chunker._get_video_duration", return_value=10.0), \
+             patch("sentrysearch.cli._apply_overlay_to_clip", return_value=True), \
+             patch("sentrysearch.cli._open_file"):
+            # _apply_overlay_to_clip is mocked to True; overlay() then renames
+            # the per-source default to `output`, which won't exist. Patch
+            # os.path.isfile to skip that branch.
+            with patch("sentrysearch.cli.os.path.isfile", return_value=False):
+                result = runner.invoke(cli, [
+                    "overlay", str(video), "-o", str(out),
+                ])
+
+        assert result.exit_code == 0, result.output
+        data = self._read_cache(_isolated_cache)
+        assert data["path"] == str(out)
+        assert data["saved_by"] == "sentrysearch"
+
+    def test_cache_failure_does_not_fail_command(self, runner, monkeypatch, _isolated_cache):
+        results = [
+            {"source_file": "/a.mp4", "start_time": 0.0, "end_time": 30.0,
+             "similarity_score": 0.9},
+        ]
+
+        def boom(*a, **kw):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(
+            "sentrysearch._toolkit_cache.write_last_clip", boom,
+        )
+
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.embedder.get_embedder", return_value=MagicMock()), \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)), \
+             patch("sentrysearch.search.search_footage", return_value=results), \
+             patch("sentrysearch.trimmer.trim_top_results",
+                   return_value=["/tmp/clip.mp4"]):
+            inst = MagicMock()
+            inst.get_stats.return_value = {"total_chunks": 5}
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["search", "test", "--save-top", "1"])
+
+        assert result.exit_code == 0
+        assert "warning" in result.output.lower()
+        assert "disk full" in result.output
+
+
 class TestImgCommand:
     def test_img_empty_index(self, runner, tmp_path):
         img_path = tmp_path / "q.jpg"

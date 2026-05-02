@@ -21,6 +21,26 @@ def _fmt_time(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _cache_last_clip(path: str) -> None:
+    """Record path as the most-recent clip for cross-tool integration.
+
+    Failures are non-fatal — the cache is a UX nicety, not a correctness
+    requirement.
+    """
+    from pathlib import Path
+
+    from . import _toolkit_cache
+
+    try:
+        _toolkit_cache.write_last_clip(Path(os.path.abspath(path)))
+        click.echo("Saved clip path cached for sentryblur --last", err=True)
+    except Exception as e:
+        click.secho(
+            f"(warning: could not write last-clip cache: {e})",
+            fg="yellow", err=True,
+        )
+
+
 def _open_file(path: str) -> None:
     """Open a file with the system's default application."""
     try:
@@ -688,6 +708,7 @@ def _present_results(results, threshold, trim, save_top, output_dir, overlay, ve
             click.echo(f"\nSaved clip: {clip_path}")
 
         if clip_paths:
+            _cache_last_clip(clip_paths[0])
             _open_file(clip_paths[0])
 
 
@@ -950,6 +971,7 @@ def overlay(video, output):
         if output != overlay_path and os.path.isfile(overlay_path):
             os.replace(overlay_path, output)
         click.secho(f"Saved: {output}", fg="green")
+        _cache_last_clip(output)
         _open_file(output)
     else:
         raise SystemExit(1)
