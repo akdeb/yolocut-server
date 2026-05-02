@@ -10,7 +10,6 @@ dependencies = [
     "google-genai>=1.0",
     "imageio-ffmpeg>=0.5",
     "protobuf>=4.0,<7",
-    "platformdirs>=4.0",
 ]
 
 [project.optional-dependencies]
