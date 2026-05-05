@@ -1,5 +1,6 @@
 """Tests for sentrysearch.cli (Click CLI)."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -753,7 +754,7 @@ class TestLastClipCache:
         assert result.exit_code == 0, result.output
         assert _isolated_cache.is_file()
         data = self._read_cache(_isolated_cache)
-        assert data["path"] == "/tmp/clip1.mp4"
+        assert data["path"] == os.path.abspath("/tmp/clip1.mp4")
         assert data["saved_by"] == "sentrysearch"
         assert "Saved clip path cached for sentryblur" in result.output
 
@@ -776,7 +777,7 @@ class TestLastClipCache:
 
         assert result.exit_code == 0, result.output
         data = self._read_cache(_isolated_cache)
-        assert data["path"] == "/tmp/rank1.mp4"
+        assert data["path"] == os.path.abspath("/tmp/rank1.mp4")
 
     def test_img_save_top_writes_cache(self, runner, tmp_path, _isolated_cache):
         img_path = tmp_path / "q.jpg"
@@ -798,7 +799,7 @@ class TestLastClipCache:
 
         assert result.exit_code == 0, result.output
         data = self._read_cache(_isolated_cache)
-        assert data["path"] == "/tmp/img_clip.mp4"
+        assert data["path"] == os.path.abspath("/tmp/img_clip.mp4")
 
     def test_overlay_writes_cache(self, runner, tmp_path, _isolated_cache):
         video = tmp_path / "in.mp4"
