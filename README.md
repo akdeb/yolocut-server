@@ -2,13 +2,13 @@
 
 Semantic search over video footage. Type what you're looking for, get a trimmed clip back.
 
-**New:** [Search by image](#search-by-image)
+**New:** [Blur objects in your videos](#redact-with-sentryblur) with [SentryBlur](https://github.com/ssrajadh/sentryblur), composes directly with SentrySearch
 
 [<video src="https://github.com/ssrajadh/sentrysearch/raw/main/docs/demo.mp4" controls width="100%"></video>](https://github.com/user-attachments/assets/baf98fad-080b-48e1-97f5-a2db2cbd53f5)
 
 ## How it works
 
-SentrySearch splits your videos into overlapping chunks, embeds each chunk as video using either Google's Gemini Embedding API or a local Qwen3-VL model, and stores the vectors in a local ChromaDB database. When you search, your text query (or image — see [search by image](#search-by-image)) is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
+SentrySearch splits your videos into overlapping chunks, embeds each chunk as video using either Google's Gemini Embedding API or a local Qwen3-VL model, and stores the vectors in a local ChromaDB database. When you search, your text query (or image, see [search by image](#search-by-image)) is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
 
 ## Getting Started
 
@@ -222,6 +222,17 @@ uv tool install ".[tesla]"
 Without geopy, the overlay still works but omits the city/road name.
 
 Source: [teslamotors/dashcam](https://github.com/teslamotors/dashcam)
+
+### Redact with SentryBlur
+
+[SentryBlur](https://github.com/ssrajadh/sentryblur) is a sibling tool for local face, license plate, and natural-language redaction of video. Every time `sentrysearch search` saves a clip, it caches the path to `~/.sentrysearch/last_clip.json`; SentryBlur picks that up via `--last`, so search-then-redact is two commands and no path-passing:
+
+```bash
+sentrysearch search "car cuts me off"
+sentryblur prompt --last "road signs"   # → match_<...>_blurred.mp4
+```
+
+`sentryblur faces --last` and `sentryblur plates --last` work the same way. Pick `faces` or `plates` for fast CPU detectors; use `prompt "<text>"` for arbitrary objects (phone screens, monitors, name tags) — `prompt` requires an NVIDIA GPU or Apple Silicon. See the [SentryBlur README](https://github.com/ssrajadh/sentryblur#readme) for install instructions and hardware notes.
 
 ### Managing the index
 
