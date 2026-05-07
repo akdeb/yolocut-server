@@ -6,6 +6,28 @@ Semantic search over video footage. Type what you're looking for, get a trimmed 
 
 [<video src="https://github.com/ssrajadh/sentrysearch/raw/main/docs/demo.mp4" controls width="100%"></video>](https://github.com/user-attachments/assets/baf98fad-080b-48e1-97f5-a2db2cbd53f5)
 
+## Table of Contents
+
+- [How it works](#how-it-works)
+- [Getting Started](#getting-started)
+- [Usage](#usage)
+  - [Init](#init)
+  - [Index footage](#index-footage)
+  - [Search](#search)
+  - [Search by image](#search-by-image)
+  - [Local Backend (no API key needed)](#local-backend-no-api-key-needed)
+  - [Why the local model is fast](#why-the-local-model-is-fast)
+  - [Tesla Metadata Overlay](#tesla-metadata-overlay)
+  - [Redact with SentryBlur](#redact-with-sentryblur)
+  - [Managing the index](#managing-the-index)
+  - [Verbose mode](#verbose-mode)
+- [How is this possible?](#how-is-this-possible)
+- [Cost](#cost)
+- [Known Warnings (harmless)](#known-warnings-harmless)
+- [Limitations & Future Work](#limitations--future-work)
+- [Compatibility](#compatibility)
+- [Requirements](#requirements)
+
 ## How it works
 
 SentrySearch splits your videos into overlapping chunks, embeds each chunk as video using either Google's Gemini Embedding API or a local Qwen3-VL model, and stores the vectors in a local ChromaDB database. When you search, your text query (or image, see [search by image](#search-by-image)) is embedded into the same vector space and matched against the stored video embeddings. The top match is automatically trimmed from the original file and saved as a clip.
