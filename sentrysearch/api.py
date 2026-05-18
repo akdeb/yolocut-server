@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -210,7 +210,19 @@ def _clip_url(path: str | Path) -> str:
     return f"/clips?path={quote(str(path), safe='')}"
 
 
-def _format_result(result: dict, rank: int, clip_path: str | None = None) -> dict:
+def _absolute_url(base_url: str | None, path: str | None) -> str | None:
+    if base_url is None or path is None:
+        return None
+    return f"{base_url.rstrip('/')}{path}"
+
+
+def _format_result(
+    result: dict,
+    rank: int,
+    clip_path: str | None = None,
+    *,
+    base_url: str | None = None,
+) -> dict:
     clip_url = None
     if clip_path is not None:
         clip_url = _clip_url(clip_path)
@@ -225,6 +237,7 @@ def _format_result(result: dict, rank: int, clip_path: str | None = None) -> dic
         "similarity_score": result["similarity_score"],
         "clip_path": clip_path,
         "clip_url": clip_url,
+        "clip_stream_url": _absolute_url(base_url, clip_url),
     }
 
 
@@ -596,6 +609,7 @@ def _search(
     model: str | None,
     quantize: bool | None,
     verbose: bool,
+    base_url: str | None = None,
 ) -> dict:
     from .embedder import get_embedder, reset_embedder
     from .search import search_footage, search_footage_by_image
@@ -645,7 +659,7 @@ def _search(
             formatted = []
             for idx, result in enumerate(raw_results, 1):
                 clip_path = clip_paths[idx - 1] if idx <= len(clip_paths) else None
-                formatted.append(_format_result(result, idx, clip_path))
+                formatted.append(_format_result(result, idx, clip_path, base_url=base_url))
 
             return {
                 "query": query,
@@ -745,7 +759,7 @@ async def job_events(job_id: str):
 
 
 @app.post("/search")
-def search(request: SearchRequest) -> dict:
+def search(request: SearchRequest, http_request: Request) -> dict:
     return _search(
         query=request.query,
         image_path=None,
@@ -760,11 +774,12 @@ def search(request: SearchRequest) -> dict:
         model=request.model,
         quantize=request.quantize,
         verbose=request.verbose,
+        base_url=str(http_request.base_url),
     )
 
 
 @app.post("/search/batch")
-def search_batch(request: BatchSearchRequest) -> dict:
+def search_batch(request: BatchSearchRequest, http_request: Request) -> dict:
     rows = []
     for index, item in enumerate(request.items):
         result = _search(
@@ -781,6 +796,7 @@ def search_batch(request: BatchSearchRequest) -> dict:
             model=request.model,
             quantize=request.quantize,
             verbose=request.verbose,
+            base_url=str(http_request.base_url),
         )
         rows.append(
             {
@@ -794,7 +810,7 @@ def search_batch(request: BatchSearchRequest) -> dict:
 
 
 @app.post("/search/image")
-def search_by_image(request: ImageSearchRequest) -> dict:
+def search_by_image(request: ImageSearchRequest, http_request: Request) -> dict:
     if not os.path.isfile(request.image_path):
         raise HTTPException(status_code=404, detail=f"Image not found: {request.image_path}")
     return _search(
@@ -811,6 +827,7 @@ def search_by_image(request: ImageSearchRequest) -> dict:
         model=request.model,
         quantize=request.quantize,
         verbose=request.verbose,
+        base_url=str(http_request.base_url),
     )
 
 

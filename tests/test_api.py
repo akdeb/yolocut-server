@@ -190,6 +190,26 @@ def test_search_batch_preserves_order_and_maps_results(monkeypatch):
     assert calls[0]["backend"] == "gemini"
 
 
+def test_format_result_includes_absolute_clip_stream_url():
+    result = api._format_result(
+        {
+            "source_file": "/source/video.mov",
+            "start_time": 12.0,
+            "end_time": 14.0,
+            "similarity_score": 0.83,
+        },
+        rank=1,
+        clip_path="/clips/generated.mp4",
+        base_url="http://127.0.0.1:8080/",
+    )
+
+    assert result["clip_url"] == "/clips?path=%2Fclips%2Fgenerated.mp4"
+    assert (
+        result["clip_stream_url"]
+        == "http://127.0.0.1:8080/clips?path=%2Fclips%2Fgenerated.mp4"
+    )
+
+
 def test_filter_unindexed_videos_skips_already_indexed_source_files(tmp_path):
     videos_dir = tmp_path / "videos"
     videos_dir.mkdir()
