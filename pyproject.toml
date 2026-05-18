@@ -10,6 +10,8 @@ dependencies = [
     "google-genai>=1.0",
     "imageio-ffmpeg>=0.5",
     "protobuf>=4.0,<7",
+    "fastapi>=0.136.1",
+    "uvicorn>=0.42.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +36,7 @@ local-quantized = [
 
 [project.scripts]
 sentrysearch = "sentrysearch.cli:cli"
+sentrysearch-api = "sentrysearch.api:main"
 
 [build-system]
 requires = ["hatchling"]
