@@ -84,15 +84,27 @@ ffmpeg is required for video chunking and trimming. If you don't have it system-
 The API app is exported from `index.py` for Vercel and from
 `sentrysearch.api:app` for local development.
 
-Required production environment variables:
+Required environment variables:
 
 - `GEMINI_API_KEY`
 - `CHROMADB_API_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
+- `BLOB_READ_WRITE_TOKEN` — required for private Vercel Blob broll videos
 
 Optional Chroma Cloud environment variables:
 
 - `CHROMADB_TENANT` — defaults to `649833fe-0d8e-42b9-916d-9fa71acc5e52`
 - `CHROMADB_DATABASE` — defaults to `yolocut-broll`
+
+All environments write embeddings to the shared Chroma collection
+`video_chunks`. API index and search requests require `customer_id`; it is the
+tenant key and is applied as a Chroma metadata filter so one customer cannot
+receive another customer's chunks.
+
+Optional frontend environment variable:
+
+- `FRONTEND_ORIGIN` — defaults to `https://yolocut.vercel.app`
 
 Run locally:
 
@@ -100,14 +112,19 @@ Run locally:
 uv run sentrysearch-api
 ```
 
-Deploy to Vercel:
+`POST /index` creates an in-memory job, returns a `job_id`, and runs indexing in
+the current FastAPI process. The frontend can poll `GET /jobs/{job_id}` for live
+local progress. After each broll is successfully indexed into Chroma, the API
+updates the Supabase `brolls` row to `indexed = true`.
 
-```bash
-vc deploy
+```json
+{
+  "customer_id": "gruns",
+  "chunk_duration": 3,
+  "overlap": 1,
+  "backend": "gemini"
+}
 ```
-
-`POST /index` requires a `path` in the request body; the API no longer defaults
-to a repo-local `videos/` directory.
 
 ## Usage
 

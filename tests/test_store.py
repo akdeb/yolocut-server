@@ -157,21 +157,21 @@ class TestStoreBackend:
         from sentrysearch.store import SentryStore
 
         store = SentryStore(db_path=tmp_path / "db", backend="local")
-        assert store.collection.name == "dashcam_chunks_local"
+        assert store.collection.name == "video_chunks"
 
     def test_local_model_collection_name(self, tmp_path):
         from sentrysearch.store import SentryStore
 
         store = SentryStore(db_path=tmp_path / "db", backend="local", model="qwen2b")
-        assert store.collection.name == "dashcam_chunks_local_qwen2b"
+        assert store.collection.name == "video_chunks"
 
     def test_gemini_backend_collection_name(self, tmp_path):
         from sentrysearch.store import SentryStore
 
         store = SentryStore(db_path=tmp_path / "db", backend="gemini")
-        assert store.collection.name == "dashcam_chunks"
+        assert store.collection.name == "video_chunks"
 
-    def test_backends_use_separate_collections(self, tmp_path):
+    def test_backend_metadata_can_filter_shared_collection(self, tmp_path):
         from sentrysearch.store import SentryStore
 
         db = tmp_path / "db"
@@ -184,9 +184,13 @@ class TestStoreBackend:
         })
 
         assert gemini_store.get_stats()["total_chunks"] == 1
-        assert local_store.get_stats()["total_chunks"] == 0
+        assert local_store.get_stats()["total_chunks"] == 1
+        assert local_store.search(
+            emb,
+            where={"embedding_backend": "local"},
+        ) == []
 
-    def test_models_use_separate_collections(self, tmp_path):
+    def test_model_metadata_can_filter_shared_collection(self, tmp_path):
         from sentrysearch.store import SentryStore
 
         db = tmp_path / "db"
@@ -199,7 +203,11 @@ class TestStoreBackend:
         })
 
         assert store_2b.get_stats()["total_chunks"] == 1
-        assert store_8b.get_stats()["total_chunks"] == 0
+        assert store_8b.get_stats()["total_chunks"] == 1
+        assert store_8b.search(
+            emb,
+            where={"embedding_model": "qwen8b"},
+        ) == []
 
     def test_get_model(self, tmp_path):
         from sentrysearch.store import SentryStore

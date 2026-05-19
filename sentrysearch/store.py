@@ -11,6 +11,7 @@ import chromadb
 DEFAULT_DB_PATH = Path.home() / ".sentrysearch" / "db"
 DEFAULT_CHROMA_TENANT = "649833fe-0d8e-42b9-916d-9fa71acc5e52"
 DEFAULT_CHROMA_DATABASE = "yolocut-broll"
+CHROMA_COLLECTION_NAME = "video_chunks"
 
 
 class BackendMismatchError(RuntimeError):
@@ -18,13 +19,8 @@ class BackendMismatchError(RuntimeError):
 
 
 def _collection_name(backend: str, model: str | None = None) -> str:
-    """Return ChromaDB collection name for a backend and optional model."""
-    if backend == "gemini":
-        return "dashcam_chunks"
-    if model:
-        return f"dashcam_chunks_local_{model}"
-    # Legacy: local backend without model distinction
-    return "dashcam_chunks_local"
+    """Return the shared ChromaDB collection name."""
+    return CHROMA_COLLECTION_NAME
 
 
 def _use_chroma_cloud(db_path: str | Path | None = None) -> bool:
@@ -62,7 +58,17 @@ def detect_index(db_path: str | Path | None = None) -> tuple[str | None, str | N
     client = _chroma_client(db_path)
     existing = {c.name for c in client.list_collections()}
 
-    # Gemini first (default / legacy)
+    if CHROMA_COLLECTION_NAME in existing:
+        col = client.get_collection(CHROMA_COLLECTION_NAME)
+        if col.count() > 0:
+            results = col.get(limit=1, include=["metadatas"])
+            metadatas = results.get("metadatas") or []
+            if metadatas:
+                meta = metadatas[0] or {}
+                return meta.get("embedding_backend", "gemini"), meta.get("embedding_model")
+            return "gemini", None
+
+    # Legacy collections kept for local CLI backward compatibility.
     if "dashcam_chunks" in existing:
         col = client.get_collection("dashcam_chunks")
         if col.count() > 0:
@@ -111,9 +117,7 @@ class SentryStore:
         self._model = model
         # Separate collection per backend+model so incompatible vectors never mix.
         col_name = _collection_name(backend, model)
-        metadata = {"hnsw:space": "cosine", "embedding_backend": backend}
-        if model:
-            metadata["embedding_model"] = model
+        metadata = {"hnsw:space": "cosine"}
         self._collection = self._client.get_or_create_collection(
             name=col_name,
             metadata=metadata,
@@ -126,12 +130,12 @@ class SentryStore:
     def get_backend(self) -> str:
         """Return the backend this index was built with."""
         meta = self._collection.metadata or {}
-        return meta.get("embedding_backend", "gemini")
+        return meta.get("embedding_backend", self._backend)
 
     def get_model(self) -> str | None:
         """Return the model this index was built with, or None."""
         meta = self._collection.metadata or {}
-        return meta.get("embedding_model")
+        return meta.get("embedding_model", self._model)
 
     def check_backend(self, backend: str) -> None:
         """Raise BackendMismatchError if *backend* doesn't match the index."""
@@ -162,11 +166,14 @@ class SentryStore:
             "source_file": metadata["source_file"],
             "start_time": float(metadata["start_time"]),
             "end_time": float(metadata["end_time"]),
+            "embedding_backend": self._backend,
             "indexed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if self._model:
+            meta["embedding_model"] = self._model
         # Carry over any extra metadata the caller provides
         for key in metadata:
-            if key not in meta and key != "embedding":
+            if key not in meta and key != "embedding" and metadata[key] is not None:
                 meta[key] = metadata[key]
 
         self._collection.upsert(
@@ -190,8 +197,11 @@ class SentryStore:
                 "source_file": chunk["source_file"],
                 "start_time": float(chunk["start_time"]),
                 "end_time": float(chunk["end_time"]),
+                "embedding_backend": self._backend,
                 "indexed_at": now,
             })
+            if self._model:
+                metadatas[-1]["embedding_model"] = self._model
 
         self._collection.upsert(
             ids=ids,
@@ -207,28 +217,36 @@ class SentryStore:
         self,
         query_embedding: list[float],
         n_results: int = 5,
+        where: dict | None = None,
     ) -> list[dict]:
         """Return top N results with distances and metadata."""
         count = self._collection.count()
         if count == 0:
             return []
 
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=min(n_results, count),
-        )
+        query_kwargs = {
+            "query_embeddings": [query_embedding],
+            "n_results": min(n_results, count),
+        }
+        if where:
+            query_kwargs["where"] = where
+        results = self._collection.query(**query_kwargs)
 
         hits = []
         for i in range(len(results["ids"][0])):
             meta = results["metadatas"][0][i]
             distance = results["distances"][0][i]
-            hits.append({
+            hit = {
                 "source_file": meta["source_file"],
                 "start_time": meta["start_time"],
                 "end_time": meta["end_time"],
                 "score": 1.0 - distance,  # cosine distance → similarity
                 "distance": distance,
-            })
+            }
+            for key, value in meta.items():
+                if key not in hit:
+                    hit[key] = value
+            hits.append(hit)
         return hits
 
     def is_indexed(self, source_file: str) -> bool:

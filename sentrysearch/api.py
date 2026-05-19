@@ -7,13 +7,17 @@ import json
 import mimetypes
 import os
 import shutil
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlparse
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -21,29 +25,37 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .cli import _apply_overlay_to_clip, _embed_with_retry, _fmt_time
 
+_ENV_PATH = os.path.join(os.path.expanduser("~"), ".sentrysearch", ".env")
+load_dotenv(_ENV_PATH)
+load_dotenv()
+load_dotenv(".env.local")
+
 
 app = FastAPI(
     title="SentrySearch API",
     version="0.1.0",
     description="HTTP API for indexing and searching dashcam footage.",
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _work_lock = threading.Lock()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        os.getenv("FRONTEND_ORIGIN", "https://yolocut.vercel.app"),
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
 
 class IndexRequest(BaseModel):
-    path: str = Field(..., description="Video file or directory to index.")
-    chunk_duration: int = Field(30, gt=0)
-    overlap: int = Field(5, ge=0)
+    customer_id: str = Field(..., min_length=1)
+    chunk_duration: int = Field(3, gt=0)
+    overlap: int = Field(1, ge=0)
     preprocess: bool = True
     target_resolution: int = Field(480, gt=0)
     target_fps: int = Field(5, gt=0)
@@ -53,11 +65,6 @@ class IndexRequest(BaseModel):
     retry_failed: bool = False
     skip_still: bool = False
     verbose: bool = False
-
-    @field_validator("path")
-    @classmethod
-    def _expand_path(cls, value: str) -> str:
-        return os.path.abspath(os.path.expanduser(value))
 
     @model_validator(mode="after")
     def _validate_chunking(self) -> "IndexRequest":
@@ -69,6 +76,7 @@ class IndexRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
+    customer_id: str = Field(..., min_length=1)
     query: str = Field(..., min_length=1)
     results: int = Field(5, ge=1, le=100)
     output_dir: str = "~/sentrysearch_clips"
@@ -93,6 +101,7 @@ class BatchSearchItem(BaseModel):
 
 
 class BatchSearchRequest(BaseModel):
+    customer_id: str = Field(..., min_length=1)
     items: list[BatchSearchItem] = Field(..., min_length=1)
     results: int = Field(5, ge=1, le=100)
     output_dir: str = "~/sentrysearch_clips"
@@ -113,6 +122,7 @@ class BatchSearchRequest(BaseModel):
 
 
 class ImageSearchRequest(BaseModel):
+    customer_id: str = Field(..., min_length=1)
     image_path: str = Field(..., description="Image file to use as the query.")
     results: int = Field(5, ge=1, le=100)
     output_dir: str = "~/sentrysearch_clips"
@@ -150,17 +160,19 @@ def _add_event(job_id: str, message: str) -> None:
         job["updated_at"] = _now()
 
 
-def _public_job(job_id: str) -> dict:
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        public = dict(job)
+def _public_job(row: dict) -> dict:
+    public = dict(row)
     status = public.get("status")
+    public["job_id"] = str(public.get("job_id"))
     public["done"] = status in {"succeeded", "failed"}
     public["succeeded"] = status == "succeeded"
     public["failed"] = status == "failed"
     public.setdefault("progress", 1.0 if public["done"] else 0.0)
+    public.setdefault("files_done", 0)
+    public.setdefault("total_files", 0)
+    public.setdefault("current_file", None)
+    public.setdefault("current_broll_id", None)
+    public.setdefault("error", None)
     return public
 
 
@@ -228,32 +240,15 @@ def _format_result(
         "start_time_formatted": _fmt_time(result["start_time"]),
         "end_time_formatted": _fmt_time(result["end_time"]),
         "similarity_score": result["similarity_score"],
+        "broll_id": result.get("broll_id"),
+        "customer_id": result.get("customer_id"),
+        "title": result.get("title"),
+        "creator": result.get("creator"),
+        "blob_url": result.get("blob_url"),
         "clip_path": clip_path,
         "clip_url": clip_url,
         "clip_stream_url": _absolute_url(base_url, clip_url),
     }
-
-
-def _filter_unindexed_videos(
-    videos: list[str],
-    indexed_sources: set[str],
-    *,
-    job_id: str | None = None,
-) -> tuple[list[str], int]:
-    videos_to_index = []
-    skipped_files = 0
-    for video_path in videos:
-        abs_path = os.path.abspath(video_path)
-        if abs_path in indexed_sources:
-            skipped_files += 1
-            if job_id is not None:
-                _add_event(
-                    job_id,
-                    f"Skipping {os.path.basename(video_path)} (already indexed)",
-                )
-        else:
-            videos_to_index.append(video_path)
-    return videos_to_index, skipped_files
 
 
 def _index_progress(file_idx: int, total_files: int, chunk_idx: int = 0, total_chunks: int = 0) -> float:
@@ -263,6 +258,114 @@ def _index_progress(file_idx: int, total_files: int, chunk_idx: int = 0, total_c
     if total_chunks > 0:
         file_progress = min(chunk_idx / total_chunks, 1.0)
     return min(((file_idx - 1) + file_progress) / total_files, 1.0)
+
+
+def _supabase_config() -> tuple[str, str]:
+    url = os.getenv("SUPABASE_URL", "https://orjrkzierhpmkamhwejb.supabase.co")
+    key = os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    if not key:
+        raise RuntimeError("SUPABASE_PUBLISHABLE_KEY is not configured.")
+    return url.rstrip("/"), key
+
+
+def _supabase_headers() -> dict[str, str]:
+    _url, key = _supabase_config()
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _supabase_request(
+    method: str,
+    path: str,
+    body: dict | None = None,
+    *,
+    prefer: str | None = None,
+) -> object:
+    base_url, _key = _supabase_config()
+    data = None if body is None else json.dumps(body).encode()
+    headers = _supabase_headers()
+    if prefer is not None:
+        headers["Prefer"] = prefer
+    elif method == "PATCH":
+        headers["Prefer"] = "return=minimal"
+    request = UrlRequest(
+        f"{base_url}{path}",
+        data=data,
+        headers=headers,
+        method=method,
+    )
+    with urlopen(request, timeout=30) as response:
+        payload = response.read()
+        if not payload:
+            return None
+        return json.loads(payload.decode())
+
+
+def _tenant_where(
+    customer_id: str,
+    backend: str,
+    model: str | None,
+) -> dict:
+    clauses = [
+        {"customer_id": customer_id},
+        {"embedding_backend": backend},
+    ]
+    if model is not None:
+        clauses.append({"embedding_model": model})
+    return clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+
+def _fetch_unindexed_brolls(customer_id: str) -> list[dict]:
+    filters = [
+        ("select", "*"),
+        ("customer_id", f"eq.{customer_id}"),
+        ("indexed", "eq.false"),
+    ]
+    query = urlencode(filters)
+    result = _supabase_request("GET", f"/rest/v1/brolls?{query}")
+    if not isinstance(result, list):
+        raise RuntimeError("Unexpected Supabase response while fetching brolls.")
+    return result
+
+
+def _update_broll_indexed(
+    broll_id: str,
+    customer_id: str,
+) -> None:
+    filters = [
+        ("broll_id", f"eq.{broll_id}"),
+        ("customer_id", f"eq.{customer_id}"),
+    ]
+    query = urlencode(filters)
+    _supabase_request("PATCH", f"/rest/v1/brolls?{query}", {"indexed": True})
+
+
+def _broll_id(row: dict) -> str:
+    value = row.get("broll_id") or row.get("id")
+    if value is None:
+        raise RuntimeError("Supabase broll row is missing broll_id.")
+    return str(value)
+
+
+def _download_blob(blob_url: str, directory: str, fallback_name: str) -> str:
+    parsed = urlparse(blob_url)
+    suffix = Path(parsed.path).suffix or ".mp4"
+    target = Path(directory) / f"{fallback_name}{suffix}"
+    headers = {"User-Agent": "sentrysearch-api/0.1"}
+    if parsed.hostname and parsed.hostname.endswith(".blob.vercel-storage.com"):
+        token = os.getenv("BLOB_READ_WRITE_TOKEN")
+        if not token:
+            raise RuntimeError(
+                "BLOB_READ_WRITE_TOKEN is required to download private Vercel Blob videos."
+            )
+        headers["Authorization"] = f"Bearer {token}"
+    request = UrlRequest(blob_url, headers=headers)
+    with urlopen(request, timeout=120) as response, open(target, "wb") as out:
+        shutil.copyfileobj(response, out)
+    return str(target)
 
 
 def _trim_results(
@@ -298,13 +401,11 @@ def _trim_results(
 
 def _run_index(job_id: str, request: IndexRequest) -> None:
     from .chunker import (
-        SUPPORTED_VIDEO_EXTENSIONS,
         _get_video_duration,
         chunk_video,
         expected_chunk_spans,
         is_still_frame_chunk,
         preprocess_chunk,
-        scan_directory,
     )
     from .dlq import DeadLetterQueue
     from .embedder import get_embedder, reset_embedder
@@ -314,224 +415,200 @@ def _run_index(job_id: str, request: IndexRequest) -> None:
 
     try:
         with _work_lock:
-            if request.overlap >= request.chunk_duration:
-                raise ValueError(
-                    f"overlap ({request.overlap}s) must be less than "
-                    f"chunk_duration ({request.chunk_duration}s)."
-                )
-            if not os.path.exists(request.path):
-                raise FileNotFoundError(f"Path not found: {request.path}")
-
             backend, model = _normalize_backend(
                 request.backend, request.model, for_index=True,
             )
             _set_job(job_id, backend=backend, model=model)
 
-            videos = [request.path] if os.path.isfile(request.path) else scan_directory(request.path)
-            if not videos:
-                supported = ", ".join(SUPPORTED_VIDEO_EXTENSIONS)
-                message = f"No supported video files found ({supported})."
-                _add_event(job_id, message)
-                _set_job(
-                    job_id,
-                    status="succeeded",
-                    finished_at=_now(),
-                    progress=1.0,
-                    result={"message": message, "new_chunks": 0, "new_files": 0},
-                )
-                return
-
             store = SentryStore(backend=backend, model=model)
-            indexed_sources = {
-                os.path.abspath(source_file)
-                for source_file in store.get_stats()["source_files"]
-            }
-            videos_to_index, skipped_files = _filter_unindexed_videos(
-                videos,
-                indexed_sources,
-                job_id=job_id,
-            )
+            brolls = _fetch_unindexed_brolls(request.customer_id)
+            total_files = len(brolls)
+            _set_job(job_id, total_files=total_files)
 
-            if not videos_to_index:
-                stats = store.get_stats()
-                message = "All supported video files are already indexed."
-                _add_event(job_id, message)
+            if not brolls:
                 _set_job(
                     job_id,
                     status="succeeded",
                     finished_at=_now(),
                     progress=1.0,
-                    files_done=len(videos),
-                    total_files=len(videos),
+                    files_done=0,
+                    total_files=0,
                     result={
-                        "message": message,
+                        "message": f"No unindexed brolls found for customer {request.customer_id}.",
                         "new_chunks": 0,
                         "new_files": 0,
-                        "skipped_files": skipped_files,
-                        "skipped_still_chunks": 0,
-                        "failed_chunks": 0,
-                        "total_chunks": stats["total_chunks"],
-                        "unique_source_files": stats["unique_source_files"],
-                        "source_files": stats["source_files"],
                     },
                 )
                 return
 
             embedder = get_embedder(backend, model=model, quantize=request.quantize)
             dlq = DeadLetterQueue()
-            total_files = len(videos_to_index)
             new_files = 0
             new_chunks = 0
+            skipped_files = 0
             skipped_chunks = 0
-            dlq_chunks = 0
+            failed_chunks = 0
 
-            for file_idx, video_path in enumerate(videos_to_index, 1):
-                abs_path = os.path.abspath(video_path)
-                basename = os.path.basename(video_path)
+            for file_idx, broll in enumerate(brolls, 1):
+                broll_id = _broll_id(broll)
+                blob_url = broll.get("blob_url")
+                if not blob_url:
+                    raise RuntimeError(f"Broll {broll_id} is missing blob_url.")
+
+                title = broll.get("title") or ""
+                creator = broll.get("creator") or ""
+                display_name = title or os.path.basename(blob_url) or broll_id
                 _set_job(
                     job_id,
-                    current_file=abs_path,
+                    current_broll_id=broll_id,
+                    current_file=display_name,
+                    current_chunk=0,
+                    total_chunks_in_file=0,
                     files_done=file_idx - 1,
                     total_files=total_files,
                     progress=_index_progress(file_idx, total_files),
                 )
 
-                try:
-                    duration = _get_video_duration(abs_path)
-                    expected_spans = expected_chunk_spans(
-                        duration,
+                with tempfile.TemporaryDirectory(prefix="sentrysearch_broll_") as tmp_dir:
+                    video_path = _download_blob(blob_url, tmp_dir, broll_id)
+
+                    try:
+                        duration = _get_video_duration(video_path)
+                        spans = expected_chunk_spans(
+                            duration,
+                            chunk_duration=request.chunk_duration,
+                            overlap=request.overlap,
+                        )
+                        chunk_key = f"{request.customer_id}:{broll_id}:{blob_url}"
+                        if spans and all(
+                            store.has_chunk(store.make_chunk_id(chunk_key, start))
+                            for start, _ in spans
+                        ):
+                            skipped_files += 1
+                            _update_broll_indexed(broll_id, request.customer_id)
+                            _set_job(
+                                job_id,
+                                files_done=file_idx,
+                                progress=_index_progress(file_idx + 1, total_files),
+                            )
+                            continue
+                    except Exception:
+                        pass
+
+                    chunks = chunk_video(
+                        video_path,
                         chunk_duration=request.chunk_duration,
                         overlap=request.overlap,
                     )
-                    if expected_spans and all(
-                        store.has_chunk(store.make_chunk_id(abs_path, start))
-                        for start, _ in expected_spans
-                    ):
-                        _add_event(job_id, f"Skipping {basename} (already indexed)")
-                        continue
-                except Exception:
-                    pass
+                    files_to_cleanup: list[str] = []
+                    file_new_chunks = 0
 
-                chunks = chunk_video(
-                    abs_path,
-                    chunk_duration=request.chunk_duration,
-                    overlap=request.overlap,
-                )
-                files_to_cleanup: list[str] = []
-                file_new_chunks = 0
+                    for chunk_idx, chunk in enumerate(chunks, 1):
+                        _set_job(
+                            job_id,
+                            current_broll_id=broll_id,
+                            current_file=display_name,
+                            current_chunk=chunk_idx,
+                            total_chunks_in_file=len(chunks),
+                            files_done=file_idx - 1,
+                            progress=_index_progress(
+                                file_idx,
+                                total_files,
+                                chunk_idx - 1,
+                                len(chunks),
+                            ),
+                        )
+                        chunk_key = f"{request.customer_id}:{broll_id}:{blob_url}"
+                        chunk_id = store.make_chunk_id(chunk_key, chunk["start_time"])
 
-                for chunk_idx, chunk in enumerate(chunks, 1):
-                    _set_job(
-                        job_id,
-                        current_chunk=chunk_idx,
-                        total_chunks_in_file=len(chunks),
-                        files_done=file_idx - 1,
-                        progress=_index_progress(
-                            file_idx,
-                            total_files,
-                            chunk_idx - 1,
-                            len(chunks),
-                        ),
-                    )
-                    chunk_id = store.make_chunk_id(abs_path, chunk["start_time"])
-
-                    if store.has_chunk(chunk_id):
-                        files_to_cleanup.append(chunk["chunk_path"])
-                        continue
-                    if dlq.contains(chunk_id):
-                        if request.retry_failed:
-                            dlq.remove(chunk_id)
-                        else:
-                            _add_event(
-                                job_id,
-                                f"Skipping {basename} chunk {chunk_idx}/{len(chunks)} (in DLQ)",
-                            )
+                        if store.has_chunk(chunk_id):
                             files_to_cleanup.append(chunk["chunk_path"])
                             continue
-                    if request.skip_still and is_still_frame_chunk(
-                        chunk["chunk_path"], verbose=request.verbose,
-                    ):
-                        skipped_chunks += 1
-                        files_to_cleanup.append(chunk["chunk_path"])
-                        continue
+                        if dlq.contains(chunk_id):
+                            if request.retry_failed:
+                                dlq.remove(chunk_id)
+                            else:
+                                files_to_cleanup.append(chunk["chunk_path"])
+                                continue
+                        if request.skip_still and is_still_frame_chunk(
+                            chunk["chunk_path"], verbose=request.verbose,
+                        ):
+                            skipped_chunks += 1
+                            files_to_cleanup.append(chunk["chunk_path"])
+                            continue
 
-                    _add_event(
-                        job_id,
-                        f"Indexing file {file_idx}/{total_files}: {basename} "
-                        f"[chunk {chunk_idx}/{len(chunks)}]",
-                    )
-                    embed_path = chunk["chunk_path"]
-                    if request.preprocess:
-                        embed_path = preprocess_chunk(
-                            embed_path,
-                            target_resolution=request.target_resolution,
-                            target_fps=request.target_fps,
-                        )
-                        if embed_path != chunk["chunk_path"]:
-                            files_to_cleanup.append(embed_path)
+                        embed_path = chunk["chunk_path"]
+                        if request.preprocess:
+                            embed_path = preprocess_chunk(
+                                embed_path,
+                                target_resolution=request.target_resolution,
+                                target_fps=request.target_fps,
+                            )
+                            if embed_path != chunk["chunk_path"]:
+                                files_to_cleanup.append(embed_path)
 
-                    embedding = _embed_with_retry(
-                        embedder,
-                        embed_path,
-                        {
+                        metadata = {
                             "chunk_id": chunk_id,
-                            "source_file": abs_path,
+                            "source_file": blob_url,
+                            "broll_id": broll_id,
+                            "customer_id": request.customer_id,
+                            "blob_url": blob_url,
                             "start_time": chunk["start_time"],
                             "end_time": chunk["end_time"],
-                        },
-                        dlq,
-                        verbose=request.verbose,
-                    )
-                    files_to_cleanup.append(chunk["chunk_path"])
-                    if embedding is None:
-                        dlq_chunks += 1
-                        continue
-                    store.add_chunk(
-                        chunk_id,
-                        embedding,
-                        {
-                            "source_file": abs_path,
-                            "start_time": chunk["start_time"],
-                            "end_time": chunk["end_time"],
-                        },
-                    )
-                    file_new_chunks += 1
+                        }
+                        if title:
+                            metadata["title"] = title
+                        if creator:
+                            metadata["creator"] = creator
 
-                for path in files_to_cleanup:
-                    try:
-                        os.unlink(path)
-                    except OSError:
-                        pass
+                        embedding = _embed_with_retry(
+                            embedder,
+                            embed_path,
+                            metadata,
+                            dlq,
+                            verbose=request.verbose,
+                        )
+                        files_to_cleanup.append(chunk["chunk_path"])
+                        if embedding is None:
+                            failed_chunks += 1
+                            continue
 
-                if chunks:
-                    shutil.rmtree(os.path.dirname(chunks[0]["chunk_path"]), ignore_errors=True)
+                        store.add_chunk(chunk_id, embedding, metadata)
+                        file_new_chunks += 1
+
+                    for path in files_to_cleanup:
+                        try:
+                            os.unlink(path)
+                        except OSError:
+                            pass
+                    if chunks:
+                        shutil.rmtree(os.path.dirname(chunks[0]["chunk_path"]), ignore_errors=True)
 
                 if file_new_chunks:
                     new_files += 1
                     new_chunks += file_new_chunks
+                    _update_broll_indexed(broll_id, request.customer_id)
+
                 _set_job(
                     job_id,
                     files_done=file_idx,
                     progress=_index_progress(file_idx + 1, total_files),
                 )
 
-            stats = store.get_stats()
-            result = {
-                "new_chunks": new_chunks,
-                "new_files": new_files,
-                "skipped_files": skipped_files,
-                "skipped_still_chunks": skipped_chunks,
-                "failed_chunks": dlq_chunks,
-                "total_chunks": stats["total_chunks"],
-                "unique_source_files": stats["unique_source_files"],
-                "source_files": stats["source_files"],
-            }
             _set_job(
                 job_id,
                 status="succeeded",
                 finished_at=_now(),
                 progress=1.0,
-                result=result,
+                files_done=total_files,
+                total_files=total_files,
+                result={
+                    "new_chunks": new_chunks,
+                    "new_files": new_files,
+                    "skipped_files": skipped_files,
+                    "skipped_still_chunks": skipped_chunks,
+                    "failed_chunks": failed_chunks,
+                },
             )
     except Exception as exc:
         _set_job(job_id, status="failed", finished_at=_now(), error=str(exc))
@@ -541,6 +618,7 @@ def _run_index(job_id: str, request: IndexRequest) -> None:
 
 def _search(
     *,
+    customer_id: str,
     query: str | None,
     image_path: str | None,
     results_count: int,
@@ -583,11 +661,24 @@ def _search(
             get_embedder(backend, model=model, quantize=quantize)
             if save_top is not None and save_top > results_count:
                 results_count = save_top
+            where = _tenant_where(customer_id, backend, model)
 
             raw_results = (
-                search_footage(query or "", store, n_results=results_count, verbose=verbose)
+                search_footage(
+                    query or "",
+                    store,
+                    n_results=results_count,
+                    verbose=verbose,
+                    where=where,
+                )
                 if image_path is None
-                else search_footage_by_image(image_path, store, n_results=results_count, verbose=verbose)
+                else search_footage_by_image(
+                    image_path,
+                    store,
+                    n_results=results_count,
+                    verbose=verbose,
+                    where=where,
+                )
             )
             best_score = raw_results[0]["similarity_score"] if raw_results else None
             low_confidence = best_score is not None and best_score < threshold
@@ -609,6 +700,7 @@ def _search(
             return {
                 "query": query,
                 "image_path": image_path,
+                "customer_id": customer_id,
                 "backend": backend,
                 "model": model,
                 "threshold": threshold,
@@ -637,39 +729,50 @@ def stats() -> dict:
 
 @app.post("/index", status_code=202)
 def index(request: IndexRequest, background_tasks: BackgroundTasks) -> dict:
-    if not os.path.exists(request.path):
-        raise HTTPException(status_code=404, detail=f"Path not found: {request.path}")
     job_id = uuid.uuid4().hex
     with _jobs_lock:
         _jobs[job_id] = {
             "job_id": job_id,
-            "type": "index",
             "status": "queued",
             "created_at": _now(),
             "updated_at": _now(),
+            "customer_id": request.customer_id,
+            "progress": 0.0,
+            "files_done": 0,
+            "total_files": 0,
+            "current_broll_id": None,
+            "current_file": None,
+            "current_chunk": 0,
+            "total_chunks_in_file": 0,
+            "error": None,
             "events": [],
         }
     background_tasks.add_task(_run_index, job_id, request)
     return {
         "job_id": job_id,
         "status": "queued",
-        "path": request.path,
-        "job_url": f"/jobs/{job_id}",
     }
 
 
 @app.get("/jobs/{job_id}")
 def job(job_id: str) -> dict:
-    return _public_job(job_id)
+    with _jobs_lock:
+        row = _jobs.get(job_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return _public_job(row)
 
 
 @app.get("/jobs/{job_id}/events")
 async def job_events(job_id: str):
-    _public_job(job_id)
+    with _jobs_lock:
+        if job_id not in _jobs:
+            raise HTTPException(status_code=404, detail="Job not found")
 
     async def stream():
         while True:
-            payload = _public_job(job_id)
+            with _jobs_lock:
+                payload = _public_job(_jobs[job_id])
             event = "complete" if payload["done"] else "progress"
             yield _sse_event(payload, event=event)
             if payload["done"]:
@@ -689,6 +792,7 @@ async def job_events(job_id: str):
 @app.post("/search")
 def search(request: SearchRequest, http_request: Request) -> dict:
     return _search(
+        customer_id=request.customer_id,
         query=request.query,
         image_path=None,
         results_count=request.results,
@@ -711,6 +815,7 @@ def search_batch(request: BatchSearchRequest, http_request: Request) -> dict:
     rows = []
     for index, item in enumerate(request.items):
         result = _search(
+            customer_id=request.customer_id,
             query=item.visual_broll,
             image_path=None,
             results_count=request.results,
@@ -742,6 +847,7 @@ def search_by_image(request: ImageSearchRequest, http_request: Request) -> dict:
     if not os.path.isfile(request.image_path):
         raise HTTPException(status_code=404, detail=f"Image not found: {request.image_path}")
     return _search(
+        customer_id=request.customer_id,
         query=None,
         image_path=request.image_path,
         results_count=request.results,
