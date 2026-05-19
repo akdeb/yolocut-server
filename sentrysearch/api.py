@@ -221,6 +221,13 @@ def _absolute_url(base_url: str | None, path: str | None) -> str | None:
     return f"{base_url.rstrip('/')}{path}"
 
 
+def _is_remote_url(path: str | None) -> bool:
+    if not path:
+        return False
+    parsed = urlparse(path)
+    return parsed.scheme in {"http", "https"}
+
+
 def _format_result(
     result: dict,
     rank: int,
@@ -229,8 +236,14 @@ def _format_result(
     base_url: str | None = None,
 ) -> dict:
     clip_url = None
+    clip_stream_url = None
     if clip_path is not None:
         clip_url = _clip_url(clip_path)
+        clip_stream_url = _absolute_url(base_url, clip_url)
+    elif _is_remote_url(result.get("blob_url")):
+        clip_stream_url = result.get("blob_url")
+    elif _is_remote_url(result.get("source_file")):
+        clip_stream_url = result.get("source_file")
     return {
         "rank": rank,
         "source_file": result["source_file"],
@@ -247,7 +260,7 @@ def _format_result(
         "blob_url": result.get("blob_url"),
         "clip_path": clip_path,
         "clip_url": clip_url,
-        "clip_stream_url": _absolute_url(base_url, clip_url),
+        "clip_stream_url": clip_stream_url,
     }
 
 
@@ -382,10 +395,12 @@ def _trim_results(
         return [], None
     if low_confidence and not force_trim_low_confidence:
         return [], "low_confidence"
+    count = save_top if save_top is not None else 1
+    if any(_is_remote_url(r.get("source_file")) for r in results[:count]):
+        return [], "remote_source"
 
     from .trimmer import trim_top_results
 
-    count = save_top if save_top is not None else 1
     clip_paths = trim_top_results(results, output_dir, count=count)
     if overlay:
         for idx, clip_path in enumerate(clip_paths):
