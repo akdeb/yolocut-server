@@ -1,6 +1,7 @@
 """ChromaDB vector store."""
 
 import hashlib
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,6 +9,8 @@ import chromadb
 
 
 DEFAULT_DB_PATH = Path.home() / ".sentrysearch" / "db"
+DEFAULT_CHROMA_TENANT = "649833fe-0d8e-42b9-916d-9fa71acc5e52"
+DEFAULT_CHROMA_DATABASE = "yolocut-broll"
 
 
 class BackendMismatchError(RuntimeError):
@@ -24,6 +27,29 @@ def _collection_name(backend: str, model: str | None = None) -> str:
     return "dashcam_chunks_local"
 
 
+def _use_chroma_cloud(db_path: str | Path | None = None) -> bool:
+    """Return True when Chroma Cloud credentials are configured."""
+    return db_path is None and bool(os.getenv("CHROMADB_API_KEY"))
+
+
+def _chroma_client(db_path: str | Path | None = None):
+    """Create the configured Chroma client.
+
+    Local CLI usage keeps using the persistent on-disk DB. Deployments can set
+    CHROMADB_API_KEY to switch the same store API to Chroma Cloud.
+    """
+    if _use_chroma_cloud(db_path):
+        return chromadb.CloudClient(
+            api_key=os.environ["CHROMADB_API_KEY"],
+            tenant=os.getenv("CHROMADB_TENANT", DEFAULT_CHROMA_TENANT),
+            database=os.getenv("CHROMADB_DATABASE", DEFAULT_CHROMA_DATABASE),
+        )
+
+    db_path = str(db_path or DEFAULT_DB_PATH)
+    Path(db_path).mkdir(parents=True, exist_ok=True)
+    return chromadb.PersistentClient(path=db_path)
+
+
 def detect_index(db_path: str | Path | None = None) -> tuple[str | None, str | None]:
     """Return ``(backend, model)`` for the first index with data.
 
@@ -31,10 +57,9 @@ def detect_index(db_path: str | Path | None = None) -> tuple[str | None, str | N
     Checks gemini first, then model-specific local collections, then the
     legacy ``dashcam_chunks_local`` collection (treated as qwen8b).
     """
-    db_path = str(db_path or DEFAULT_DB_PATH)
-    if not Path(db_path).exists():
+    if not _use_chroma_cloud(db_path) and not Path(db_path or DEFAULT_DB_PATH).exists():
         return None, None
-    client = chromadb.PersistentClient(path=db_path)
+    client = _chroma_client(db_path)
     existing = {c.name for c in client.list_collections()}
 
     # Gemini first (default / legacy)
@@ -81,9 +106,7 @@ class SentryStore:
 
     def __init__(self, db_path: str | Path | None = None, backend: str = "gemini",
                  model: str | None = None):
-        db_path = str(db_path or DEFAULT_DB_PATH)
-        Path(db_path).mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=db_path)
+        self._client = _chroma_client(db_path)
         self._backend = backend
         self._model = model
         # Separate collection per backend+model so incompatible vectors never mix.

@@ -79,6 +79,36 @@ ffmpeg is required for video chunking and trimming. If you don't have it system-
 
 > **Manual setup:** If you prefer not to use `sentrysearch init`, you can copy `.env.example` to `.env` and add your key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) manually.
 
+## FastAPI deployment
+
+The API app is exported from `index.py` for Vercel and from
+`sentrysearch.api:app` for local development.
+
+Required production environment variables:
+
+- `GEMINI_API_KEY`
+- `CHROMADB_API_KEY`
+
+Optional Chroma Cloud environment variables:
+
+- `CHROMADB_TENANT` — defaults to `649833fe-0d8e-42b9-916d-9fa71acc5e52`
+- `CHROMADB_DATABASE` — defaults to `yolocut-broll`
+
+Run locally:
+
+```bash
+uv run sentrysearch-api
+```
+
+Deploy to Vercel:
+
+```bash
+vc deploy
+```
+
+`POST /index` requires a `path` in the request body; the API no longer defaults
+to a repo-local `videos/` directory.
+
 ## Usage
 
 ### Init

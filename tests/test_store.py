@@ -305,3 +305,32 @@ class TestDetectIndex:
             "source_file": "v.mp4", "start_time": 0.0, "end_time": 30.0,
         })
         assert detect_index(db) == ("gemini", None)
+
+
+class TestChromaCloudConfig:
+    def test_default_store_uses_cloud_client_when_api_key_is_set(self, monkeypatch):
+        import sentrysearch.store as store_mod
+
+        captured = {}
+
+        def fake_cloud_client(**kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setenv("CHROMADB_API_KEY", "test-key")
+        monkeypatch.delenv("CHROMADB_TENANT", raising=False)
+        monkeypatch.delenv("CHROMADB_DATABASE", raising=False)
+        monkeypatch.setattr(store_mod.chromadb, "CloudClient", fake_cloud_client)
+
+        assert store_mod._chroma_client() is not None
+        assert captured == {
+            "api_key": "test-key",
+            "tenant": store_mod.DEFAULT_CHROMA_TENANT,
+            "database": store_mod.DEFAULT_CHROMA_DATABASE,
+        }
+
+    def test_explicit_db_path_stays_local_even_when_api_key_is_set(self, tmp_path, monkeypatch):
+        import sentrysearch.store as store_mod
+
+        monkeypatch.setenv("CHROMADB_API_KEY", "test-key")
+        assert not store_mod._use_chroma_cloud(tmp_path / "db")

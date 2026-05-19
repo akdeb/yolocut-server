@@ -38,15 +38,10 @@ app.add_middleware(
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _work_lock = threading.Lock()
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VIDEOS_DIR = PROJECT_ROOT / "videos"
 
 
 class IndexRequest(BaseModel):
-    path: str | None = Field(
-        None,
-        description="Video file or directory to index. Defaults to the repo videos folder.",
-    )
+    path: str = Field(..., description="Video file or directory to index.")
     chunk_duration: int = Field(30, gt=0)
     overlap: int = Field(5, ge=0)
     preprocess: bool = True
@@ -61,9 +56,7 @@ class IndexRequest(BaseModel):
 
     @field_validator("path")
     @classmethod
-    def _expand_path(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def _expand_path(cls, value: str) -> str:
         return os.path.abspath(os.path.expanduser(value))
 
     @model_validator(mode="after")
@@ -239,54 +232,6 @@ def _format_result(
         "clip_url": clip_url,
         "clip_stream_url": _absolute_url(base_url, clip_url),
     }
-
-
-def _indexed_source_files(backend: str | None = None, model: str | None = None) -> set[str]:
-    from .store import SentryStore, detect_index
-
-    if backend is None:
-        backend, detected_model = detect_index()
-        if model is None:
-            model = detected_model
-    store = SentryStore(backend=backend or "gemini", model=model)
-    return {str(Path(path).resolve()) for path in store.get_stats()["source_files"]}
-
-
-def _list_broll_videos(indexed_sources: set[str] | None = None) -> list[dict]:
-    from .chunker import SUPPORTED_VIDEO_EXTENSIONS
-
-    if not VIDEOS_DIR.is_dir():
-        return []
-    indexed_sources = indexed_sources or set()
-
-    videos = [
-        path
-        for path in VIDEOS_DIR.rglob("*")
-        if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
-    ]
-    videos.sort(key=lambda path: path.relative_to(VIDEOS_DIR).as_posix().lower())
-
-    manifest = []
-    for path in videos:
-        stat = path.stat()
-        absolute_path = path.resolve()
-        indexed = str(absolute_path) in indexed_sources
-        relative_path = path.relative_to(VIDEOS_DIR).as_posix()
-        manifest.append(
-            {
-                "name": path.stem,
-                "filename": path.name,
-                "relative_path": relative_path,
-                "path": str(absolute_path),
-                "url": _clip_url(absolute_path),
-                "indexed": indexed,
-                "size_bytes": stat.st_size,
-                "modified_at": datetime.fromtimestamp(
-                    stat.st_mtime, timezone.utc
-                ).isoformat(),
-            }
-        )
-    return manifest
 
 
 def _filter_unindexed_videos(
@@ -690,27 +635,10 @@ def stats() -> dict:
     return {"backend": backend, "model": model, **store.get_stats()}
 
 
-@app.get("/videos")
-def videos() -> dict:
-    indexed_sources = _indexed_source_files()
-    entries = _list_broll_videos(indexed_sources)
-    indexed_count = sum(1 for entry in entries if entry["indexed"])
-    return {
-        "directory": str(VIDEOS_DIR.resolve()),
-        "count": len(entries),
-        "indexed_count": indexed_count,
-        "unindexed_count": len(entries) - indexed_count,
-        "fully_indexed": bool(entries) and indexed_count == len(entries),
-        "videos": entries,
-    }
-
-
 @app.post("/index", status_code=202)
 def index(request: IndexRequest, background_tasks: BackgroundTasks) -> dict:
-    index_path = request.path or str(VIDEOS_DIR.resolve())
-    if not os.path.exists(index_path):
-        raise HTTPException(status_code=404, detail=f"Path not found: {index_path}")
-    request = request.model_copy(update={"path": index_path})
+    if not os.path.exists(request.path):
+        raise HTTPException(status_code=404, detail=f"Path not found: {request.path}")
     job_id = uuid.uuid4().hex
     with _jobs_lock:
         _jobs[job_id] = {
@@ -725,7 +653,7 @@ def index(request: IndexRequest, background_tasks: BackgroundTasks) -> dict:
     return {
         "job_id": job_id,
         "status": "queued",
-        "path": index_path,
+        "path": request.path,
         "job_url": f"/jobs/{job_id}",
     }
 
