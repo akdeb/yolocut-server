@@ -92,16 +92,30 @@ def _get_video_duration(video_path: str) -> float:
             [
                 ffprobe_exe,
                 "-v",
-                "quiet",
+                "error",
                 "-print_format",
                 "json",
                 "-show_format",
+                "-show_streams",
                 video_path,
             ],
             capture_output=True,
             text=True,
-            check=True,
         )
+        if result.returncode != 0:
+            size = os.path.getsize(video_path) if os.path.exists(video_path) else 0
+            try:
+                with open(video_path, "rb") as file:
+                    first_bytes = file.read(80).hex()
+            except OSError:
+                first_bytes = ""
+            raise RuntimeError(
+                "ffprobe could not read video "
+                f"{video_path} ({size} bytes). "
+                f"stderr={result.stderr.strip() or '<empty>'}; "
+                f"stdout={result.stdout.strip() or '<empty>'}; "
+                f"first80_hex={first_bytes}"
+            )
         info = json.loads(result.stdout)
         return float(info["format"]["duration"])
 

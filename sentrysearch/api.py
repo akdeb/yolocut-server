@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
+from urllib.error import HTTPError
 
 import uvicorn
 from dotenv import load_dotenv
@@ -363,6 +364,13 @@ def _broll_id(row: dict) -> str:
     return str(value)
 
 
+def _blob_authorization_header(token: str) -> str:
+    token = token.strip()
+    if token.lower().startswith("bearer "):
+        return token
+    return f"Bearer {token}"
+
+
 def _download_blob(blob_url: str, directory: str, fallback_name: str) -> str:
     parsed = urlparse(blob_url)
     suffix = Path(parsed.path).suffix or ".mp4"
@@ -374,10 +382,26 @@ def _download_blob(blob_url: str, directory: str, fallback_name: str) -> str:
             raise RuntimeError(
                 "BLOB_READ_WRITE_TOKEN is required to download private Vercel Blob videos."
             )
-        headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = _blob_authorization_header(token)
     request = UrlRequest(blob_url, headers=headers)
-    with urlopen(request, timeout=120) as response, open(target, "wb") as out:
-        shutil.copyfileobj(response, out)
+    try:
+        with urlopen(request, timeout=120) as response:
+            content_type = response.headers.get("content-type", "")
+            with open(target, "wb") as out:
+                shutil.copyfileobj(response, out)
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Failed to download blob {blob_url}: HTTP {exc.code} {body}"
+        ) from exc
+
+    size = target.stat().st_size
+    if size < 1024 and "json" in content_type.lower():
+        error_text = target.read_text(errors="replace")
+        raise RuntimeError(
+            f"Downloaded blob is not a video: content-type={content_type}, "
+            f"size={size} bytes, body={error_text}"
+        )
     return str(target)
 
 
@@ -415,20 +439,22 @@ def _trim_results(
 
 
 def _run_index(job_id: str, request: IndexRequest) -> None:
-    from .chunker import (
-        _get_video_duration,
-        chunk_video,
-        expected_chunk_spans,
-        is_still_frame_chunk,
-        preprocess_chunk,
-    )
-    from .dlq import DeadLetterQueue
-    from .embedder import get_embedder, reset_embedder
-    from .store import SentryStore
-
-    _set_job(job_id, status="running", started_at=_now())
-
+    reset_embedder = None
     try:
+        from .chunker import (
+            _get_video_duration,
+            chunk_video,
+            expected_chunk_spans,
+            is_still_frame_chunk,
+            preprocess_chunk,
+        )
+        from .dlq import DeadLetterQueue
+        from .embedder import get_embedder, reset_embedder as _reset_embedder
+        from .store import SentryStore
+
+        reset_embedder = _reset_embedder
+        _set_job(job_id, status="running", started_at=_now())
+
         with _work_lock:
             backend, model = _normalize_backend(
                 request.backend, request.model, for_index=True,
@@ -628,7 +654,8 @@ def _run_index(job_id: str, request: IndexRequest) -> None:
     except Exception as exc:
         _set_job(job_id, status="failed", finished_at=_now(), error=str(exc))
     finally:
-        reset_embedder()
+        if reset_embedder is not None:
+            reset_embedder()
 
 
 def _search(
